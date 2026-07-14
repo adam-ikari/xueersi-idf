@@ -2,7 +2,8 @@
 
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_vendor.h"
+#include "esp_attr.h"
+#include "sdkconfig.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -111,7 +112,7 @@ static void st7735_init_black_tab_rot90(esp_lcd_panel_io_handle_t io_handle)
 }
 
 /* ── Internal ISR callback ─────────────────────────────── */
-static bool display_flush_ready_isr(esp_lcd_panel_io_handle_t panel_io,
+static bool IRAM_ATTR display_flush_ready_isr(esp_lcd_panel_io_handle_t panel_io,
                                     esp_lcd_panel_io_event_data_t *edata,
                                     void *user_ctx)
 {
@@ -120,8 +121,9 @@ static bool display_flush_ready_isr(esp_lcd_panel_io_handle_t panel_io,
     (void)user_ctx;
 
     s_lcd_first_flush_done = true;
-    if (s_flush_ready_cb) {
-        s_flush_ready_cb(s_flush_ready_ctx);
+    hw_display_flush_ready_cb_t cb = s_flush_ready_cb;
+    if (cb) {
+        cb(s_flush_ready_ctx);
     }
     return false;
 }
@@ -224,6 +226,7 @@ bool hw_display_first_flush_done(void)
 
 void hw_display_set_flush_ready_cb(hw_display_flush_ready_cb_t cb, void *ctx)
 {
-    s_flush_ready_cb = cb;
     s_flush_ready_ctx = ctx;
+    __sync_synchronize();
+    s_flush_ready_cb = cb;
 }
