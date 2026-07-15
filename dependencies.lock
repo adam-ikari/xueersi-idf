@@ -1,4 +1,14 @@
 dependencies:
+  georgik/sdl:
+    component_hash: 28b7e15aa029404b8e3bd47be3489faee34d6bf024d049d853e6a9d7154cca9e
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 3.3.7
   idf:
     source:
       type: idf
@@ -11,7 +21,9 @@ dependencies:
       type: service
     version: 9.5.0
 direct_dependencies:
+- georgik/sdl
+- idf
 - lvgl/lvgl
-manifest_hash: da6b79d2e512dd02dc85a1bd32f76e62cfbce24c7a8df8981ea74ad6eee4bb42
+manifest_hash: 7a821c79c3d98b3b0eb2d63ab4f207481c0b25eab23fd5431e60fc5f79043c29
 target: esp32
 version: 2.0.0
