@@ -165,16 +165,15 @@ esp_err_t hw_display_init(void)
         return err;
     }
 
-    /* Register internal ISR callback so that s_lcd_first_flush_done
-     * gets set and the user's callback is dispatched. */
-    const esp_lcd_panel_io_callbacks_t cbs = {
-        .on_color_trans_done = display_flush_ready_isr,
-    };
-    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &cbs, NULL));
-
+    /* Do NOT register on_color_trans_done here — SDL3's ESP-IDF video
+     * backend registers its own callback in SDL_espidfframebuffer.c.
+     * The s_lcd_first_flush_done flag is set to true immediately because
+     * the ST7735 init commands have completed by this point; the "first
+     * flush" guard is only needed for the original LVGL garbage-frame
+     * avoidance, which is no longer relevant with SDL3. */
     s_lcd_io_handle = io_handle;
     s_lcd_display_on = false;
-    s_lcd_first_flush_done = false;
+    s_lcd_first_flush_done = true;
     st7735_init_black_tab_rot90(io_handle);
 
     return ESP_OK;

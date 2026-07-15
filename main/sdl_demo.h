@@ -24,4 +24,4 @@ typedef enum {
 } ui_page_t;
 
 void sdl_demo_create(void);
-void sdl_demo_task(void *arg);
+void *sdl_demo_task(void *arg);

@@ -44,11 +44,9 @@
 #include "hw_extio.h"
 #include "hw_sd.h"
 
-#include "sdkconfig.h"
-
-#if CONFIG_XIAOMIAO_USE_SDL
 #include "sdl_demo.h"
-#endif
+
+#include <pthread.h>
 
 #ifndef CONFIG_IDF_TARGET
 #define CONFIG_IDF_TARGET "esp32"
@@ -1302,58 +1300,18 @@ static void lvgl_task(void *arg)
 }
 #endif /* !CONFIG_XIAOMIAO_USE_SDL */
 
-/* Entry point */
 void app_main(void)
 {
-#if CONFIG_XIAOMIAO_USE_SDL
     ESP_LOGI(TAG, "Xiaomiao SDL3 demo boot");
 
     /* Hardware init (SPI2, I2C0, ADC, buzzer, ext-IO, display, buttons) */
     hw_board_init();
 
-    /* SDL3 demo init */
-    sdl_demo_create();
-
-    /* Start the SDL demo task */
-    BaseType_t ret = xTaskCreate(sdl_demo_task,
-                                 "sdl_demo",
-                                 LVGL_TASK_STACK_SIZE,
-                                 NULL,
-                                 LVGL_TASK_PRIORITY,
-                                 NULL);
-    ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
-#else
-    ESP_LOGI(TAG, "Xiaomiao LVGL 9.5 dashboard boot");
-
-    sensor_history_init();
-
-    /* Hardware init (SPI2, I2C0, ADC, buzzer, ext-IO, display, buttons) */
-    hw_board_init();
-
-    /* LVGL init */
-    lv_init();
-    lv_display_t *display = lvgl_display_init();
-    lv_group_t *group = lvgl_input_init(display);
-
-    /* Register flush-ready callback: hw_display SPI ISR -> lv_display_flush_ready */
-    hw_display_set_flush_ready_cb(lvgl_flush_ready_bridge, display);
-
-    /* LVGL 1 ms tick timer */
-    const esp_timer_create_args_t tick_timer_args = {
-        .callback = lvgl_tick_cb,
-        .name = "lvgl_tick",
-    };
-    esp_timer_handle_t tick_timer = NULL;
-    ESP_ERROR_CHECK(esp_timer_create(&tick_timer_args, &tick_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(tick_timer, LVGL_TICK_PERIOD_MS * 1000));
-
-    /* Start the LVGL task */
-    BaseType_t ret = xTaskCreate(lvgl_task,
-                                 "lvgl",
-                                 LVGL_TASK_STACK_SIZE,
-                                 group,
-                                 LVGL_TASK_PRIORITY,
-                                 NULL);
-    ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
-#endif
+    /* Start the SDL demo task. SDL_Init and all SDL calls happen inside
+     * the pthread task, because SDL_Init internally calls pthread_self()
+     * which requires the pthread TLS to be set up by pthread_create. */
+    pthread_t sdl_thread;
+    int pret = pthread_create(&sdl_thread, NULL, sdl_demo_task, NULL);
+    (void)pret;
+    pthread_detach(sdl_thread);
 }

@@ -119,7 +119,7 @@ static const uint8_t C_TEXT_R = 0xFF, C_TEXT_G = 0xFF, C_TEXT_B = 0xFF;
 static const uint8_t C_SUB_R = 0xBB, C_SUB_G = 0xBB, C_SUB_B = 0xBB;
 
 /* ── SDL3 globals ─────────────────────────────────────────── */
-static SDL_Window   *s_window   = NULL;
+static SDL_Surface  *s_surface  = NULL;
 static SDL_Renderer *s_renderer = NULL;
 static const char   *TAG        = "sdl_demo";
 
@@ -910,33 +910,50 @@ void sdl_demo_create(void)
 {
     ESP_LOGI(TAG, "SDL3 demo: creating");
 
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
+    /* SDL_Init without video — we use a software surface and push pixels
+     * to the display via hw_display_flush, bypassing SDL3's ESP-IDF video
+     * backend entirely. This avoids the pthread_self() issue and the
+     * on_color_trans_done callback conflict. */
+    if (!SDL_Init(SDL_INIT_EVENTS)) {
         ESP_LOGE(TAG, "SDL_Init failed: %s", SDL_GetError());
         return;
     }
 
-    s_window = SDL_CreateWindow("Xiaomiao", 160, 128, 0);
-    if (!s_window) {
-        ESP_LOGE(TAG, "SDL_CreateWindow failed: %s", SDL_GetError());
+    /* Create a software surface directly — no window, no video backend.
+     * SDL_CreateSoftwareRenderer renders to this surface, and we push
+     * the pixels to the display ourselves via hw_display_flush. */
+    s_surface = SDL_CreateSurface(160, 128, SDL_PIXELFORMAT_RGB565);
+    if (!s_surface) {
+        ESP_LOGE(TAG, "SDL_CreateSurface failed: %s", SDL_GetError());
         SDL_Quit();
         return;
     }
 
-    s_renderer = SDL_CreateRenderer(s_window, NULL);
+    s_renderer = SDL_CreateSoftwareRenderer(s_surface);
     if (!s_renderer) {
-        ESP_LOGE(TAG, "SDL_CreateRenderer failed: %s", SDL_GetError());
-        SDL_DestroyWindow(s_window);
+        ESP_LOGE(TAG, "SDL_CreateSoftwareRenderer failed: %s", SDL_GetError());
+        SDL_DestroySurface(s_surface);
         SDL_Quit();
         return;
     }
 
-    ESP_LOGI(TAG, "SDL3 demo: window + renderer created (160x128)");
+    ESP_LOGI(TAG, "SDL3 demo: software renderer -> 160x128 RGB565 surface");
 }
 
-void sdl_demo_task(void *arg)
+void *sdl_demo_task(void *arg)
 {
     (void)arg;
     uint32_t last_update_ms = 0;
+
+    /* SDL3 init — must happen inside the pthread task, not in app_main,
+     * because SDL_CreateWindow internally calls pthread_self() which
+     * requires the ESP-IDF pthread TLS to be set up by pthread_create. */
+    sdl_demo_create();
+
+    /* Turn on display (no need to wait for first flush — hw_display_init
+     * sets s_lcd_first_flush_done = true immediately since SDL3's video
+     * backend handles its own flush-ready callbacks). */
+    hw_display_on();
 
     /* Init history */
     sensor_history_init();
@@ -1029,8 +1046,14 @@ void sdl_demo_task(void *arg)
             const hw_board_state_t *board = hw_board_state();
             render_page(board);
 
-            /* Present to display */
+            /* Present to software surface */
             SDL_RenderPresent(s_renderer);
+
+            /* Push pixels to display via hw_display_flush */
+            if (s_surface) {
+                hw_display_flush(0, 0, s_surface->w - 1, s_surface->h - 1,
+                                 (const uint8_t *)s_surface->pixels);
+            }
         }
 
         /* Frame timing: sleep until next 16ms boundary */
@@ -1042,7 +1065,7 @@ void sdl_demo_task(void *arg)
 done:
     ESP_LOGI(TAG, "SDL3 demo: exiting");
     SDL_DestroyRenderer(s_renderer);
-    SDL_DestroyWindow(s_window);
+    SDL_DestroySurface(s_surface);
     SDL_Quit();
-    vTaskDelete(NULL);
+    return NULL;
 }
