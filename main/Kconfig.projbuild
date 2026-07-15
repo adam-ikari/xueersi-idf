@@ -1,0 +1,11 @@
+menu "Xiaomiao Configuration"
+
+    config XIAOMIAO_USE_SDL
+        bool "Use SDL3 demo instead of LVGL dashboard"
+        default y
+        help
+            Enable the SDL3-based hardware demo instead of the original
+            LVGL dashboard. The SDL demo proves video + input backends work
+            before switching to the full paged UI.
+
+endmenu

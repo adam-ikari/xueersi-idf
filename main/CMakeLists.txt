@@ -14,6 +14,13 @@ idf_component_register(SRCS "main.c"
                                      sdmmc
                                      lvgl
                                      hardware
+                                     georgik__sdl
+                                     georgik__sdl_bsp
                        INCLUDE_DIRS "")
 
 target_link_libraries(${COMPONENT_LIB} PRIVATE m)
+
+# Conditionally compile sdl_demo.c when SDL demo is enabled
+if(CONFIG_XIAOMIAO_USE_SDL)
+    target_sources(${COMPONENT_LIB} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdl_demo.c)
+endif()

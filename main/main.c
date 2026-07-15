@@ -44,6 +44,12 @@
 #include "hw_extio.h"
 #include "hw_sd.h"
 
+#include "sdkconfig.h"
+
+#if CONFIG_XIAOMIAO_USE_SDL
+#include "sdl_demo.h"
+#endif
+
 #ifndef CONFIG_IDF_TARGET
 #define CONFIG_IDF_TARGET "esp32"
 #endif
@@ -1295,6 +1301,24 @@ static void lvgl_task(void *arg)
 /* Entry point */
 void app_main(void)
 {
+#if CONFIG_XIAOMIAO_USE_SDL
+    ESP_LOGI(TAG, "Xiaomiao SDL3 demo boot");
+
+    /* Hardware init (SPI2, I2C0, ADC, buzzer, ext-IO, display, buttons) */
+    hw_board_init();
+
+    /* SDL3 demo init */
+    sdl_demo_create();
+
+    /* Start the SDL demo task */
+    BaseType_t ret = xTaskCreate(sdl_demo_task,
+                                 "sdl_demo",
+                                 LVGL_TASK_STACK_SIZE,
+                                 NULL,
+                                 LVGL_TASK_PRIORITY,
+                                 NULL);
+    ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
+#else
     ESP_LOGI(TAG, "Xiaomiao LVGL 9.5 dashboard boot");
 
     sensor_history_init();
@@ -1327,4 +1351,5 @@ void app_main(void)
                                  LVGL_TASK_PRIORITY,
                                  NULL);
     ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
+#endif
 }
