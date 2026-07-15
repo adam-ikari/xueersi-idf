@@ -5,6 +5,9 @@
  *   ST7735-compatible SPI TFT, MicroSD on shared SPI2, 6 active-low keys,
  *   GPIO14 passive buzzer, GPIO36/GPIO39 ADC sensors, I2C0 GD32/MPU6050,
  *   and GPIO25/26/32/33 extension IO.
+ *
+ * Hardware layer is delegated to components/hardware (hw_* modules).
+ * This file contains only LVGL UI code and board-state-to-widget mapping.
  */
 
 #include <assert.h>
@@ -17,12 +20,6 @@
 #include <sys/param.h>
 #include <unistd.h>
 
-#include "driver/gpio.h"
-#include "driver/i2c_master.h"
-#include "driver/ledc.h"
-#include "driver/sdspi_host.h"
-#include "driver/spi_master.h"
-#include "esp_adc/adc_oneshot.h"
 #include "esp_chip_info.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -30,12 +27,28 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_vfs_fat.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
-#include "sdmmc_cmd.h"
 #include "sdkconfig.h"
+
+/* Hardware component includes */
+#include "hw_board.h"
+#include "hw_display.h"
+#include "hw_input.h"
+#include "hw_i2c.h"
+#include "hw_gd32.h"
+#include "hw_mpu.h"
+#include "hw_adc.h"
+#include "hw_buzzer.h"
+#include "hw_extio.h"
+#include "hw_sd.h"
+
+#include "sdkconfig.h"
+
+#if CONFIG_XIAOMIAO_USE_SDL
+#include "sdl_demo.h"
+#endif
 
 #ifndef CONFIG_IDF_TARGET
 #define CONFIG_IDF_TARGET "esp32"
@@ -103,43 +116,13 @@
 #define CONFIG_SPIRAM_SPEED 0
 #endif
 
-#define LCD_HOST                    SPI2_HOST
-#define LCD_PIXEL_CLOCK_HZ          (60 * 1000 * 1000)
-#define LCD_NATIVE_H_RES            128
-#define LCD_NATIVE_V_RES            160
-#define LCD_H_RES                   160
-#define LCD_V_RES                   128
-#define LCD_DRAW_BUF_LINES          LCD_V_RES
-#define LCD_DRAW_BUF_COUNT          3
-#define LCD_DPI                     60
-#define LCD_CMD_BITS                8
-#define LCD_PARAM_BITS              8
-
-#define PIN_NUM_LCD_SCLK            GPIO_NUM_18
-#define PIN_NUM_LCD_MOSI            GPIO_NUM_23
-#define PIN_NUM_LCD_MISO            GPIO_NUM_19
-#define PIN_NUM_LCD_CS              GPIO_NUM_5
-#define PIN_NUM_LCD_DC              GPIO_NUM_4
-#define PIN_NUM_SD_CS               GPIO_NUM_22
-#define PIN_NUM_BUZZER              GPIO_NUM_14
-#define PIN_NUM_I2C_SCL             GPIO_NUM_15
-#define PIN_NUM_I2C_SDA             GPIO_NUM_21
-#define PIN_NUM_EXT_OUT1            GPIO_NUM_25
-#define PIN_NUM_EXT_OUT2            GPIO_NUM_26
-#define PIN_NUM_EXT_IN1             GPIO_NUM_32
-#define PIN_NUM_EXT_IN2             GPIO_NUM_33
-
-#define LCD_X_GAP                   0
-#define LCD_Y_GAP                   0
-
+/* LVGL / UI tuning constants (not hardware) */
 #define LVGL_TICK_PERIOD_MS         1
 #define LVGL_TASK_STACK_SIZE        (10 * 1024)
 #define LVGL_TASK_PRIORITY          5
 #define LVGL_TASK_MIN_DELAY_MS      1
 #define LVGL_TASK_MAX_DELAY_MS      16
 
-#define BUTTON_ACTIVE_LEVEL         0
-#define BUTTON_DEBOUNCE_MS          25
 #define UI_REFRESH_PERIOD_MS        16
 #define UI_ACTION_MSG_MS            850
 #define UI_HISTORY_POINTS           48
@@ -147,76 +130,9 @@
 #define THERM_UPDATE_PERIOD_MS      1000
 #define THERM_HISTORY_MIN_PCT       35
 #define THERM_HISTORY_MAX_PCT       65
-#define I2C_TIMEOUT_MS              30
-#define I2C_FREQ_HZ                 100000
-#define GD32_REPROBE_PERIOD_MS      1500
-#define MPU_REPROBE_PERIOD_MS       1500
-#define SD_SPI_MAX_FREQ_KHZ         10000
 
-#define GD32_ADDR                   0x40
-#define GD32_LED1_REG               0xA0
-#define GD32_LED2_REG               0xA1
-#define GD32_MOTOR1_REG             0x0E
-#define GD32_MOTOR2_REG             0x06
-
-#define MPU6050_ADDR                0x68
-#define MPU6050_REG_ACCEL_XOUT_H    0x3B
-#define MPU6050_REG_PWR_MGMT_1      0x6B
-#define MPU6050_REG_WHO_AM_I        0x75
-#define MPU6050_WHO_AM_I_VALUE      0x68
-
-#define ADC_LIGHT_CHAN              ADC_CHANNEL_0
-#define ADC_TEMP_CHAN               ADC_CHANNEL_3
-#define ADC_EXT_IN1_CHAN            ADC_CHANNEL_4
-#define ADC_EXT_IN2_CHAN            ADC_CHANNEL_5
-#define ADC_RAW_MAX                 4095
-
-#define BUZZER_LEDC_MODE            LEDC_LOW_SPEED_MODE
-#define BUZZER_LEDC_TIMER           LEDC_TIMER_0
-#define BUZZER_LEDC_CHANNEL         LEDC_CHANNEL_0
-#define BUZZER_DUTY                 128
-
-#define EXT_LEDC_TIMER              LEDC_TIMER_1
-#define EXT_LEDC_CHANNEL1           LEDC_CHANNEL_1
-#define EXT_LEDC_CHANNEL2           LEDC_CHANNEL_2
-#define EXT_PWM_FREQ_HZ             1000
-#define EXT_PWM_DUTY_MAX            255
-
-#define ST7735_SWRESET              0x01
-#define ST7735_SLPOUT               0x11
-#define ST7735_NORON                0x13
-#define ST7735_INVOFF               0x20
-#define ST7735_DISPOFF              0x28
-#define ST7735_DISPON               0x29
-#define ST7735_CASET                0x2A
-#define ST7735_RASET                0x2B
-#define ST7735_RAMWR                0x2C
-#define ST7735_MADCTL               0x36
-#define ST7735_COLMOD               0x3A
-#define ST7735_FRMCTR1              0xB1
-#define ST7735_FRMCTR2              0xB2
-#define ST7735_FRMCTR3              0xB3
-#define ST7735_INVCTR               0xB4
-#define ST7735_PWCTR1               0xC0
-#define ST7735_PWCTR2               0xC1
-#define ST7735_PWCTR3               0xC2
-#define ST7735_PWCTR4               0xC3
-#define ST7735_PWCTR5               0xC4
-#define ST7735_VMCTR1               0xC5
-#define ST7735_GMCTRP1              0xE0
-#define ST7735_GMCTRN1              0xE1
-
-#define MADCTL_MY                   0x80
-#define MADCTL_MX                   0x40
-#define MADCTL_MV                   0x20
-#define MADCTL_RGB                  0x00
-
-typedef struct {
-    gpio_num_t gpio;
-    uint32_t key;
-    const char *name;
-} board_button_t;
-
+/* Page enum (only for LVGL build — SDL build gets it from sdl_demo.h) */
+#if !CONFIG_XIAOMIAO_USE_SDL
 typedef enum {
     UI_PAGE_LIGHT = 0,
     UI_PAGE_THERM,
@@ -236,40 +152,7 @@ typedef enum {
     UI_PAGE_COUNT,
 } ui_page_t;
 
-typedef struct {
-    bool i2c_ready;
-    bool gd32_present;
-    bool mpu_present;
-    bool sd_mounted;
-    bool buzzer_ready;
-    bool adc_ready;
-    bool ext_pwm_ready;
-    bool led1_on;
-    bool led2_on;
-    bool motor_running[2];
-    bool motor_dir[2];
-    bool ext_out[2];
-    uint8_t motor_speed[2];
-    uint8_t ext_pwm[2];
-    uint8_t mpu_whoami;
-    uint32_t samples;
-    int light_raw;
-    int temp_raw;
-    int ext_raw[2];
-    int16_t acc[3];
-    int16_t gyro[3];
-    float pitch;
-    float roll;
-    char gesture[12];
-    char sd_name[24];
-    uint32_t sd_mb;
-    esp_err_t last_adc_err;
-    esp_err_t last_gd32_err;
-    esp_err_t last_mpu_err;
-    esp_err_t last_sd_err;
-    char action[32];
-} board_state_t;
-
+/* UI widget handle struct */
 typedef struct {
     lv_obj_t *screen;
     lv_obj_t *page;
@@ -287,44 +170,15 @@ typedef struct {
     lv_group_t *group;
     ui_page_t page_id;
 } ui_state_t;
+#endif /* !CONFIG_XIAOMIAO_USE_SDL */
 
 static const char *TAG = "xiaomiao_dash";
 
-static const board_button_t s_buttons[] = {
-    {GPIO_NUM_2, LV_KEY_UP, "UP"},
-    {GPIO_NUM_13, LV_KEY_DOWN, "DOWN"},
-    {GPIO_NUM_27, LV_KEY_LEFT, "LEFT"},
-    {GPIO_NUM_35, LV_KEY_RIGHT, "RIGHT"},
-    {GPIO_NUM_34, LV_KEY_ENTER, "A"},
-    {GPIO_NUM_12, LV_KEY_ESC, "B"},
-};
-
+#if !CONFIG_XIAOMIAO_USE_SDL
 static lv_draw_buf_t s_draw_buf3;
 static ui_state_t s_ui;
-static board_state_t s_board = {
-    .gesture = "ABSENT",
-    .sd_name = "NO CARD",
-    .motor_speed = {120, 120},
-    .ext_pwm = {128, 128},
-    .last_sd_err = ESP_ERR_NOT_FOUND,
-    .action = "Ready",
-};
 
-static adc_oneshot_unit_handle_t s_adc_handle;
-static esp_lcd_panel_io_handle_t s_lcd_io_handle;
-static i2c_master_bus_handle_t s_i2c_bus;
-static i2c_master_dev_handle_t s_gd32_dev;
-static i2c_master_dev_handle_t s_mpu_dev;
-static sdmmc_card_t *s_sd_card;
-static uint32_t s_buzzer_stop_at;
-static uint32_t s_buzzer_freq_hz = 988;
-static uint32_t s_action_until_ms;
-static uint32_t s_last_gd32_probe_ms;
-static uint32_t s_last_mpu_probe_ms;
-static bool s_gd32_probe_seen;
-static bool s_mpu_probe_seen;
-static bool s_lcd_display_on;
-static volatile bool s_lcd_first_flush_done;
+/* UI-level history buffers (not hardware) */
 static int32_t s_light_history[UI_HISTORY_POINTS];
 static int32_t s_therm_history[UI_HISTORY_POINTS];
 static uint32_t s_light_history_version;
@@ -335,10 +189,25 @@ static uint32_t s_therm_accum;
 static uint16_t s_therm_accum_count;
 static uint32_t s_last_therm_publish_ms;
 
-static int pct_from_raw(int raw)
+/* UI-level state (not hardware) */
+static uint32_t s_buzzer_freq_hz = 988;
+static uint32_t s_action_until_ms;
+
+/* Helpers */
+
+static void copy_text(char *dst, size_t dst_size, const char *src)
 {
-    raw = MAX(0, MIN(raw, ADC_RAW_MAX));
-    return (raw * 100) / ADC_RAW_MAX;
+    if (dst_size == 0) {
+        return;
+    }
+    snprintf(dst, dst_size, "%s", src ? src : "");
+}
+
+static void set_action(const char *msg)
+{
+    hw_board_state_t *board = hw_board_state_mut();
+    copy_text(board->action, sizeof(board->action), msg);
+    s_action_until_ms = lv_tick_get() + UI_ACTION_MSG_MS;
 }
 
 static void sensor_history_init(void)
@@ -370,703 +239,80 @@ static void sensor_history_push_range(int32_t *history, uint32_t *version, int v
     sensor_history_push(history, version, MAX(min_value, MIN(value, max_value)));
 }
 
-static int16_t i16_be(const uint8_t *p)
+/* Accumulate ADC readings into UI history */
+static void accumulate_adc_to_history(void)
 {
-    return (int16_t)((uint16_t)p[0] << 8 | p[1]);
-}
-
-static void copy_text(char *dst, size_t dst_size, const char *src)
-{
-    if (dst_size == 0) {
-        return;
-    }
-    snprintf(dst, dst_size, "%s", src ? src : "");
-}
-
-static void set_action(const char *msg)
-{
-    copy_text(s_board.action, sizeof(s_board.action), msg);
-    s_action_until_ms = lv_tick_get() + UI_ACTION_MSG_MS;
-}
-
-static esp_err_t i2c_write(i2c_master_dev_handle_t dev, const uint8_t *data, size_t len)
-{
-    if (!dev) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    return i2c_master_transmit(dev, data, len, I2C_TIMEOUT_MS);
-}
-
-static esp_err_t i2c_write_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t value)
-{
-    const uint8_t data[] = {reg, value};
-    return i2c_write(dev, data, sizeof(data));
-}
-
-static esp_err_t i2c_read_reg(i2c_master_dev_handle_t dev, uint8_t reg, uint8_t *data, size_t len)
-{
-    if (!dev) {
-        return ESP_ERR_INVALID_STATE;
-    }
-    return i2c_master_transmit_receive(dev, &reg, 1, data, len, I2C_TIMEOUT_MS);
-}
-
-static void gd32_mark_absent(void)
-{
-    s_board.gd32_present = false;
-    s_board.led1_on = false;
-    s_board.led2_on = false;
-    s_board.motor_running[0] = false;
-    s_board.motor_running[1] = false;
-}
-
-static esp_err_t gd32_write_reg(uint8_t reg, uint8_t value)
-{
-    esp_err_t err = i2c_write_reg(s_gd32_dev, reg, value);
-    s_board.last_gd32_err = err;
-    if (err == ESP_OK) {
-        s_board.gd32_present = true;
-    }
-    else {
-        gd32_mark_absent();
-    }
-    return err;
-}
-
-static esp_err_t gd32_motor_stop_all(void)
-{
-    const uint8_t data[] = {0x00, 0x00, 0x00, 0x00, 0x00};
-    esp_err_t err = i2c_write(s_gd32_dev, data, sizeof(data));
-    s_board.last_gd32_err = err;
-    if (err == ESP_OK) {
-        s_board.gd32_present = true;
-        s_board.motor_running[0] = false;
-        s_board.motor_running[1] = false;
-    }
-    else {
-        gd32_mark_absent();
-    }
-    return err;
-}
-
-static esp_err_t gd32_motor_set(uint8_t motor, bool dir, uint8_t speed)
-{
-    const uint8_t reg = (motor == 0) ? GD32_MOTOR1_REG : GD32_MOTOR2_REG;
-    const uint16_t pwm = ((uint16_t)speed) << 4;
-    const uint8_t pwm_l = pwm & 0xFF;
-    const uint8_t pwm_h = pwm >> 8;
-    uint8_t data[9] = {reg, 0, 0, 0, 0, 0, 0, 0, 0};
-
-    if (dir) {
-        data[3] = pwm_l;
-        data[4] = pwm_h;
-    }
-    else {
-        data[7] = pwm_l;
-        data[8] = pwm_h;
+    const hw_board_state_t *board = hw_board_state();
+    s_light_hist_accum += pct_from_raw(board->light_raw);
+    s_light_hist_count++;
+    if (s_light_hist_count >= LIGHT_HISTORY_AVG_SAMPLES) {
+        sensor_history_push(s_light_history,
+                            &s_light_history_version,
+                            (int)((s_light_hist_accum + s_light_hist_count / 2) / s_light_hist_count));
+        s_light_hist_accum = 0;
+        s_light_hist_count = 0;
     }
 
-    esp_err_t err = i2c_write(s_gd32_dev, data, sizeof(data));
-    s_board.last_gd32_err = err;
-    if (err == ESP_OK) {
-        s_board.gd32_present = true;
-        s_board.motor_running[motor] = speed > 0;
-    }
-    else {
-        gd32_mark_absent();
-    }
-    return err;
-}
-
-static void buzzer_stop(void)
-{
-    if (!s_board.buzzer_ready) {
-        return;
-    }
-    ledc_stop(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, 0);
-    s_buzzer_stop_at = 0;
-}
-
-static void buzzer_beep(uint32_t freq_hz, uint32_t ms)
-{
-    if (!s_board.buzzer_ready) {
-        return;
-    }
-    esp_err_t err = ledc_set_freq(BUZZER_LEDC_MODE, BUZZER_LEDC_TIMER, freq_hz);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Buzzer frequency %lu Hz failed: %s", (unsigned long)freq_hz, esp_err_to_name(err));
-        return;
-    }
-    err = ledc_set_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL, BUZZER_DUTY);
-    if (err == ESP_OK) {
-        err = ledc_update_duty(BUZZER_LEDC_MODE, BUZZER_LEDC_CHANNEL);
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Buzzer duty update failed: %s", esp_err_to_name(err));
-        return;
-    }
-    s_buzzer_stop_at = lv_tick_get() + ms;
-}
-
-static void hardware_process_timers(void)
-{
-    uint32_t now = lv_tick_get();
-
-    if (s_buzzer_stop_at && (int32_t)(now - s_buzzer_stop_at) >= 0) {
-        buzzer_stop();
+    const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    s_therm_accum += board->temp_raw;
+    s_therm_accum_count++;
+    if (s_last_therm_publish_ms == 0 || now_ms - s_last_therm_publish_ms >= THERM_UPDATE_PERIOD_MS) {
+        const int avg_raw = (int)((s_therm_accum + s_therm_accum_count / 2) / s_therm_accum_count);
+        /* Write averaged temp_raw into board state for UI display */
+        hw_board_state_t *b = hw_board_state_mut();
+        b->temp_raw = avg_raw;
+        sensor_history_push_range(s_therm_history,
+                                  &s_therm_history_version,
+                                  pct_from_raw(avg_raw),
+                                  THERM_HISTORY_MIN_PCT,
+                                  THERM_HISTORY_MAX_PCT);
+        s_therm_accum = 0;
+        s_therm_accum_count = 0;
+        s_last_therm_publish_ms = now_ms;
     }
 }
 
-static void mpu_probe_and_init(bool force)
-{
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-    if (!force && s_mpu_probe_seen && now_ms - s_last_mpu_probe_ms < MPU_REPROBE_PERIOD_MS) {
-        return;
-    }
-    s_mpu_probe_seen = true;
-    s_last_mpu_probe_ms = now_ms;
-
-    s_board.mpu_present = false;
-    s_board.mpu_whoami = 0;
-    copy_text(s_board.gesture, sizeof(s_board.gesture), "ABSENT");
-
-    if (!s_i2c_bus || !s_mpu_dev) {
-        s_board.last_mpu_err = ESP_ERR_INVALID_STATE;
-        return;
-    }
-
-    esp_err_t err = i2c_master_probe(s_i2c_bus, MPU6050_ADDR, I2C_TIMEOUT_MS);
-    if (err != ESP_OK) {
-        s_board.last_mpu_err = err;
-        return;
-    }
-
-    uint8_t who = 0;
-    err = i2c_read_reg(s_mpu_dev, MPU6050_REG_WHO_AM_I, &who, 1);
-    if (err != ESP_OK) {
-        s_board.last_mpu_err = err;
-        return;
-    }
-
-    s_board.mpu_whoami = who;
-    if (who != MPU6050_WHO_AM_I_VALUE) {
-        s_board.last_mpu_err = ESP_ERR_INVALID_ARG;
-        return;
-    }
-
-    err = i2c_write_reg(s_mpu_dev, MPU6050_REG_PWR_MGMT_1, 0x00);
-    if (err != ESP_OK) {
-        s_board.last_mpu_err = err;
-        return;
-    }
-
-    s_board.mpu_present = true;
-    s_board.last_mpu_err = ESP_OK;
-    copy_text(s_board.gesture, sizeof(s_board.gesture), "READY");
-}
-
-static void mpu_read(void)
-{
-    if (!s_board.mpu_present) {
-        mpu_probe_and_init(false);
-        return;
-    }
-
-    uint8_t data[14] = {0};
-    esp_err_t err = i2c_read_reg(s_mpu_dev, MPU6050_REG_ACCEL_XOUT_H, data, sizeof(data));
-    s_board.last_mpu_err = err;
-    if (err != ESP_OK) {
-        s_board.mpu_present = false;
-        copy_text(s_board.gesture, sizeof(s_board.gesture), "ABSENT");
-        return;
-    }
-
-    s_board.acc[0] = i16_be(&data[0]);
-    s_board.acc[1] = i16_be(&data[2]);
-    s_board.acc[2] = i16_be(&data[4]);
-    s_board.gyro[0] = i16_be(&data[8]);
-    s_board.gyro[1] = i16_be(&data[10]);
-    s_board.gyro[2] = i16_be(&data[12]);
-
-    const float ax = s_board.acc[0] / 16384.0f;
-    const float ay = s_board.acc[1] / 16384.0f;
-    const float az = s_board.acc[2] / 16384.0f;
-    s_board.pitch = atan2f(-ax, sqrtf(ay * ay + az * az)) * 57.29578f;
-    s_board.roll = atan2f(ay, az) * 57.29578f;
-
-    if (s_board.pitch > 25.0f) {
-        copy_text(s_board.gesture, sizeof(s_board.gesture), "TILT UP");
-    }
-    else if (s_board.pitch < -25.0f) {
-        copy_text(s_board.gesture, sizeof(s_board.gesture), "TILT DN");
-    }
-    else if (s_board.roll > 25.0f) {
-        copy_text(s_board.gesture, sizeof(s_board.gesture), "TILT R");
-    }
-    else if (s_board.roll < -25.0f) {
-        copy_text(s_board.gesture, sizeof(s_board.gesture), "TILT L");
-    }
-    else {
-        copy_text(s_board.gesture, sizeof(s_board.gesture), "LEVEL");
-    }
-}
-
-static esp_err_t adc_read_one(adc_channel_t channel, int *raw)
-{
-    esp_err_t err = adc_oneshot_read(s_adc_handle, channel, raw);
-    if (err != ESP_OK && s_board.last_adc_err == ESP_OK) {
-        s_board.last_adc_err = err;
-    }
-    return err;
-}
-
-static esp_err_t adc_read_sensors(void)
-{
-    if (!s_board.adc_ready) {
-        if (s_board.last_adc_err == ESP_OK) {
-            s_board.last_adc_err = ESP_ERR_INVALID_STATE;
-        }
-        return s_board.last_adc_err;
-    }
-
-    if (!s_adc_handle) {
-        s_board.last_adc_err = ESP_ERR_INVALID_STATE;
-        return s_board.last_adc_err;
-    }
-
-    int raw = 0;
-    s_board.last_adc_err = ESP_OK;
-    if (adc_read_one(ADC_LIGHT_CHAN, &raw) == ESP_OK) {
-        s_board.light_raw = raw;
-        s_light_hist_accum += pct_from_raw(raw);
-        s_light_hist_count++;
-        if (s_light_hist_count >= LIGHT_HISTORY_AVG_SAMPLES) {
-            sensor_history_push(s_light_history,
-                                &s_light_history_version,
-                                (int)((s_light_hist_accum + s_light_hist_count / 2) / s_light_hist_count));
-            s_light_hist_accum = 0;
-            s_light_hist_count = 0;
-        }
-    }
-    if (adc_read_one(ADC_TEMP_CHAN, &raw) == ESP_OK) {
-        const uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-        s_therm_accum += raw;
-        s_therm_accum_count++;
-        if (s_last_therm_publish_ms == 0 || now_ms - s_last_therm_publish_ms >= THERM_UPDATE_PERIOD_MS) {
-            const int avg_raw = (int)((s_therm_accum + s_therm_accum_count / 2) / s_therm_accum_count);
-            s_board.temp_raw = avg_raw;
-            sensor_history_push_range(s_therm_history,
-                                      &s_therm_history_version,
-                                      pct_from_raw(avg_raw),
-                                      THERM_HISTORY_MIN_PCT,
-                                      THERM_HISTORY_MAX_PCT);
-            s_therm_accum = 0;
-            s_therm_accum_count = 0;
-            s_last_therm_publish_ms = now_ms;
-        }
-    }
-    if (adc_read_one(ADC_EXT_IN1_CHAN, &raw) == ESP_OK) {
-        s_board.ext_raw[0] = raw;
-    }
-    if (adc_read_one(ADC_EXT_IN2_CHAN, &raw) == ESP_OK) {
-        s_board.ext_raw[1] = raw;
-    }
-    return s_board.last_adc_err;
-}
-
-static ledc_channel_t ext_pwm_channel(uint8_t index)
-{
-    return index == 0 ? EXT_LEDC_CHANNEL1 : EXT_LEDC_CHANNEL2;
-}
-
-static esp_err_t ext_output_set(uint8_t index, bool on)
-{
-    if (index >= 2 || !s_board.ext_pwm_ready) {
-        return ESP_ERR_INVALID_STATE;
-    }
-
-    const ledc_channel_t channel = ext_pwm_channel(index);
-    const uint32_t duty = on ? s_board.ext_pwm[index] : 0;
-
-    esp_err_t err = ledc_set_duty(BUZZER_LEDC_MODE, channel, duty);
-    if (err == ESP_OK) {
-        err = ledc_update_duty(BUZZER_LEDC_MODE, channel);
-    }
-    if (err == ESP_OK) {
-        s_board.ext_out[index] = on && duty > 0;
-    }
-    return err;
-}
-
-static void gd32_probe(bool force)
-{
-    uint32_t now_ms = (uint32_t)(esp_timer_get_time() / 1000);
-
-    if (!force && s_gd32_probe_seen && now_ms - s_last_gd32_probe_ms < GD32_REPROBE_PERIOD_MS) {
-        return;
-    }
-    s_gd32_probe_seen = true;
-    s_last_gd32_probe_ms = now_ms;
-
-    if (!s_i2c_bus || !s_gd32_dev) {
-        s_board.last_gd32_err = ESP_ERR_INVALID_STATE;
-        s_board.gd32_present = false;
-    }
-    else {
-        s_board.last_gd32_err = i2c_master_probe(s_i2c_bus, GD32_ADDR, I2C_TIMEOUT_MS);
-        s_board.gd32_present = (s_board.last_gd32_err == ESP_OK);
-    }
-
-    if (!s_board.gd32_present) {
-        gd32_mark_absent();
-    }
-}
-
-static void i2c_probe_devices(bool force)
-{
-    if (!s_i2c_bus) {
-        s_board.i2c_ready = false;
-        s_board.gd32_present = false;
-        s_board.mpu_present = false;
-        s_board.last_gd32_err = ESP_ERR_INVALID_STATE;
-        s_board.last_mpu_err = ESP_ERR_INVALID_STATE;
-        return;
-    }
-
-    s_board.i2c_ready = true;
-    gd32_probe(force);
-
-    if (force || !s_board.mpu_present) {
-        mpu_probe_and_init(force);
-    }
-}
-
-static void hardware_update(void)
-{
-    (void)adc_read_sensors();
-    i2c_probe_devices(false);
-    mpu_read();
-    s_board.samples++;
-}
-
-static void sd_try_mount(void)
-{
-    if (s_board.sd_mounted) {
-        return;
-    }
-
-    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-    host.slot = LCD_HOST;
-    host.max_freq_khz = SD_SPI_MAX_FREQ_KHZ;
-
-    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
-    slot_config.host_id = LCD_HOST;
-    slot_config.gpio_cs = PIN_NUM_SD_CS;
-    slot_config.wait_for_miso = 20;
-
-    esp_vfs_fat_mount_config_t mount_config = VFS_FAT_MOUNT_DEFAULT_CONFIG();
-    mount_config.format_if_mount_failed = false;
-    mount_config.max_files = 3;
-
-    s_board.last_sd_err = esp_vfs_fat_sdspi_mount("/sdcard",
-                                                  &host,
-                                                  &slot_config,
-                                                  &mount_config,
-                                                  &s_sd_card);
-    if (s_board.last_sd_err == ESP_OK && s_sd_card) {
-        s_board.sd_mounted = true;
-        memset(s_board.sd_name, 0, sizeof(s_board.sd_name));
-        memcpy(s_board.sd_name,
-               s_sd_card->cid.name,
-               MIN(sizeof(s_sd_card->cid.name), sizeof(s_board.sd_name) - 1));
-        s_board.sd_mb = (uint32_t)(((uint64_t)s_sd_card->csd.capacity * s_sd_card->csd.sector_size) / (1024 * 1024));
-    }
-    else {
-        s_board.sd_mounted = false;
-        s_sd_card = NULL;
-        copy_text(s_board.sd_name, sizeof(s_board.sd_name), "NO CARD");
-        s_board.sd_mb = 0;
-    }
-}
-
-static esp_err_t sd_unmount(void)
-{
-    esp_err_t err = ESP_ERR_NOT_FOUND;
-
-    if (s_board.sd_mounted && s_sd_card) {
-        err = esp_vfs_fat_sdcard_unmount("/sdcard", s_sd_card);
-        if (err != ESP_OK) {
-            s_board.last_sd_err = err;
-            set_action("SD unmount fail");
-            return err;
-        }
-    }
-    else {
-        set_action("No SD card");
-        s_board.last_sd_err = err;
-        return err;
-    }
-
-    s_board.sd_mounted = false;
-    s_sd_card = NULL;
-    copy_text(s_board.sd_name, sizeof(s_board.sd_name), "NO CARD");
-    s_board.sd_mb = 0;
-    s_board.last_sd_err = ESP_ERR_NOT_FOUND;
-    set_action("SD unmounted");
-    return ESP_OK;
-}
-
-static void adc_init(void)
-{
-    adc_oneshot_unit_init_cfg_t init_cfg = {
-        .unit_id = ADC_UNIT_1,
-        .ulp_mode = ADC_ULP_MODE_DISABLE,
-    };
-    esp_err_t err = adc_oneshot_new_unit(&init_cfg, &s_adc_handle);
-    if (err != ESP_OK) {
-        s_board.last_adc_err = err;
-        ESP_LOGW(TAG, "ADC init failed: %s", esp_err_to_name(err));
-        return;
-    }
-
-    adc_oneshot_chan_cfg_t chan_cfg = {
-        .atten = ADC_ATTEN_DB_12,
-        .bitwidth = ADC_BITWIDTH_12,
-    };
-    err = adc_oneshot_config_channel(s_adc_handle, ADC_LIGHT_CHAN, &chan_cfg);
-    if (err == ESP_OK) {
-        err = adc_oneshot_config_channel(s_adc_handle, ADC_TEMP_CHAN, &chan_cfg);
-    }
-    if (err == ESP_OK) {
-        err = adc_oneshot_config_channel(s_adc_handle, ADC_EXT_IN1_CHAN, &chan_cfg);
-    }
-    if (err == ESP_OK) {
-        err = adc_oneshot_config_channel(s_adc_handle, ADC_EXT_IN2_CHAN, &chan_cfg);
-    }
-    if (err != ESP_OK) {
-        s_board.last_adc_err = err;
-        ESP_LOGW(TAG, "ADC channel config failed: %s", esp_err_to_name(err));
-        return;
-    }
-    s_board.last_adc_err = ESP_OK;
-    s_board.adc_ready = true;
-}
-
-static void ext_io_init(void)
-{
-    ledc_timer_config_t timer_cfg = {
-        .speed_mode = BUZZER_LEDC_MODE,
-        .duty_resolution = LEDC_TIMER_8_BIT,
-        .timer_num = EXT_LEDC_TIMER,
-        .freq_hz = EXT_PWM_FREQ_HZ,
-        .clk_cfg = LEDC_AUTO_CLK,
-    };
-    esp_err_t err = ledc_timer_config(&timer_cfg);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Extension PWM timer init failed: %s", esp_err_to_name(err));
-        return;
-    }
-
-    const ledc_channel_config_t channel_cfg[] = {
-        {
-            .gpio_num = PIN_NUM_EXT_OUT1,
-            .speed_mode = BUZZER_LEDC_MODE,
-            .channel = EXT_LEDC_CHANNEL1,
-            .intr_type = LEDC_INTR_DISABLE,
-            .timer_sel = EXT_LEDC_TIMER,
-            .duty = 0,
-            .hpoint = 0,
-            .sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
-        },
-        {
-            .gpio_num = PIN_NUM_EXT_OUT2,
-            .speed_mode = BUZZER_LEDC_MODE,
-            .channel = EXT_LEDC_CHANNEL2,
-            .intr_type = LEDC_INTR_DISABLE,
-            .timer_sel = EXT_LEDC_TIMER,
-            .duty = 0,
-            .hpoint = 0,
-            .sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
-        },
-    };
-
-    err = ledc_channel_config(&channel_cfg[0]);
-    if (err == ESP_OK) {
-        err = ledc_channel_config(&channel_cfg[1]);
-    }
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Extension PWM channel init failed: %s", esp_err_to_name(err));
-        return;
-    }
-    s_board.ext_pwm_ready = true;
-    (void)ext_output_set(0, false);
-    (void)ext_output_set(1, false);
-}
-
-static void i2c_init(void)
-{
-    i2c_master_bus_config_t bus_cfg = {
-        .i2c_port = I2C_NUM_0,
-        .sda_io_num = PIN_NUM_I2C_SDA,
-        .scl_io_num = PIN_NUM_I2C_SCL,
-        .clk_source = I2C_CLK_SRC_DEFAULT,
-        .glitch_ignore_cnt = 7,
-        .flags.enable_internal_pullup = true,
-    };
-    esp_err_t err = i2c_new_master_bus(&bus_cfg, &s_i2c_bus);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "I2C init failed: %s", esp_err_to_name(err));
-        return;
-    }
-
-    const i2c_device_config_t gd32_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = GD32_ADDR,
-        .scl_speed_hz = I2C_FREQ_HZ,
-    };
-    const i2c_device_config_t mpu_cfg = {
-        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-        .device_address = MPU6050_ADDR,
-        .scl_speed_hz = I2C_FREQ_HZ,
-    };
-    s_board.i2c_ready = true;
-
-    err = i2c_master_bus_add_device(s_i2c_bus, &gd32_cfg, &s_gd32_dev);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "GD32 I2C device add failed: %s", esp_err_to_name(err));
-        s_board.last_gd32_err = err;
-        s_gd32_dev = NULL;
-    }
-
-    err = i2c_master_bus_add_device(s_i2c_bus, &mpu_cfg, &s_mpu_dev);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "MPU I2C device add failed: %s", esp_err_to_name(err));
-        s_board.last_mpu_err = err;
-        s_mpu_dev = NULL;
-    }
-
-    i2c_probe_devices(true);
-}
-
-static void buzzer_init(void)
-{
-    ledc_timer_config_t timer_cfg = {
-        .speed_mode = BUZZER_LEDC_MODE,
-        .duty_resolution = LEDC_TIMER_8_BIT,
-        .timer_num = BUZZER_LEDC_TIMER,
-        .freq_hz = 880,
-        .clk_cfg = LEDC_AUTO_CLK,
-    };
-    esp_err_t err = ledc_timer_config(&timer_cfg);
-    if (err != ESP_OK) {
-        ESP_LOGW(TAG, "Buzzer timer init failed: %s", esp_err_to_name(err));
-        return;
-    }
-
-    ledc_channel_config_t channel_cfg = {
-        .gpio_num = PIN_NUM_BUZZER,
-        .speed_mode = BUZZER_LEDC_MODE,
-        .channel = BUZZER_LEDC_CHANNEL,
-        .intr_type = LEDC_INTR_DISABLE,
-        .timer_sel = BUZZER_LEDC_TIMER,
-        .duty = 0,
-        .hpoint = 0,
-        .sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
-    };
-    err = ledc_channel_config(&channel_cfg);
-    if (err == ESP_OK) {
-        s_board.buzzer_ready = true;
-    }
-    else {
-        ESP_LOGW(TAG, "Buzzer channel init failed: %s", esp_err_to_name(err));
-    }
-}
-
-static void hardware_init(void)
-{
-    adc_init();
-    ext_io_init();
-    i2c_init();
-    buzzer_init();
-    if (s_board.gd32_present) {
-        gd32_motor_stop_all();
-    }
-    hardware_update();
-}
-
-static bool lcd_flush_ready_cb(esp_lcd_panel_io_handle_t panel_io,
-                               esp_lcd_panel_io_event_data_t *edata,
-                               void *user_ctx)
-{
-    (void)panel_io;
-    (void)edata;
-
-    lv_display_t *display = (lv_display_t *)user_ctx;
-    s_lcd_first_flush_done = true;
-    lv_display_flush_ready(display);
-    return false;
-}
-
+/* LVGL flush callback */
 static void lvgl_flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *px_map)
 {
-    esp_lcd_panel_io_handle_t io_handle = lv_display_get_user_data(display);
-    const int width = area->x2 - area->x1 + 1;
-    const int height = area->y2 - area->y1 + 1;
-    const uint16_t x_start = area->x1 + LCD_X_GAP;
-    const uint16_t x_end = area->x2 + LCD_X_GAP;
-    const uint16_t y_start = area->y1 + LCD_Y_GAP;
-    const uint16_t y_end = area->y2 + LCD_Y_GAP;
-    const uint8_t caset[] = {
-        x_start >> 8, x_start & 0xFF,
-        x_end >> 8, x_end & 0xFF,
-    };
-    const uint8_t raset[] = {
-        y_start >> 8, y_start & 0xFF,
-        y_end >> 8, y_end & 0xFF,
-    };
-
-    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(io_handle, ST7735_CASET, caset, sizeof(caset)));
-    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(io_handle, ST7735_RASET, raset, sizeof(raset)));
-    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(io_handle, ST7735_RAMWR, px_map, width * height * sizeof(uint16_t)));
+    (void)display;
+    hw_display_flush(area->x1, area->y1, area->x2, area->y2, px_map);
 }
 
+/* LVGL tick callback */
 static void lvgl_tick_cb(void *arg)
 {
     (void)arg;
     lv_tick_inc(LVGL_TICK_PERIOD_MS);
 }
 
+/* Bridge: flush-ready ISR from hw_display -> lv_display_flush_ready */
+static bool lvgl_flush_ready_bridge(void *ctx)
+{
+    lv_display_t *display = (lv_display_t *)ctx;
+    lv_display_flush_ready(display);
+    return false;
+}
+
+/* Keypad input (LVGL-specific) */
 static void keypad_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
-    static int last_raw_index = -1;
-    static int stable_index = -1;
-    static uint32_t raw_changed_ms = 0;
     static uint32_t last_key = LV_KEY_ENTER;
-    int raw_index = -1;
-    const uint32_t now_ms = lv_tick_get();
+    int found_idx = -1;
 
-    for (size_t i = 0; i < sizeof(s_buttons) / sizeof(s_buttons[0]); ++i) {
-        if (gpio_get_level(s_buttons[i].gpio) == BUTTON_ACTIVE_LEVEL) {
-            raw_index = (int)i;
+    size_t count = 0;
+    const hw_button_t *buttons = hw_input_buttons(&count);
+
+    for (size_t i = 0; i < count; ++i) {
+        if (hw_input_is_pressed(i)) {
+            found_idx = (int)i;
             break;
         }
     }
 
-    if (raw_index != last_raw_index) {
-        last_raw_index = raw_index;
-        raw_changed_ms = now_ms;
-        if (raw_index < 0) {
-            stable_index = -1;
-        }
-    }
-    if (lv_tick_elaps(raw_changed_ms) >= BUTTON_DEBOUNCE_MS) {
-        stable_index = last_raw_index;
-    }
-
-    if (stable_index >= 0) {
-        last_key = s_buttons[stable_index].key;
+    if (found_idx >= 0) {
+        last_key = buttons[found_idx].key;
         data->state = LV_INDEV_STATE_PRESSED;
         data->key = last_key;
     }
@@ -1076,170 +322,8 @@ static void keypad_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     }
 }
 
-static void buttons_init(void)
-{
-    uint64_t pin_mask = 0;
-    uint64_t pullup_mask = 0;
-
-    for (size_t i = 0; i < sizeof(s_buttons) / sizeof(s_buttons[0]); ++i) {
-        pin_mask |= 1ULL << s_buttons[i].gpio;
-        if (s_buttons[i].gpio != GPIO_NUM_34 && s_buttons[i].gpio != GPIO_NUM_35) {
-            pullup_mask |= 1ULL << s_buttons[i].gpio;
-        }
-    }
-
-    gpio_config_t io_conf = {
-        .pin_bit_mask = pin_mask,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&io_conf));
-
-    gpio_config_t pullup_conf = {
-        .pin_bit_mask = pullup_mask,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    ESP_ERROR_CHECK(gpio_config(&pullup_conf));
-}
-
-static void st7735_tx_param(esp_lcd_panel_io_handle_t io_handle, int cmd, const void *param, size_t param_size)
-{
-    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(io_handle, cmd, param, param_size));
-}
-
-static void st7735_delay_ms(uint32_t ms)
-{
-    vTaskDelay(pdMS_TO_TICKS(ms));
-}
-
-static void st7735_clear_black(esp_lcd_panel_io_handle_t io_handle)
-{
-    static uint16_t line[LCD_H_RES * 8];
-    const uint8_t caset[] = {0x00, 0x00, 0x00, LCD_H_RES - 1};
-
-    memset(line, 0, sizeof(line));
-    ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(io_handle, ST7735_CASET, caset, sizeof(caset)));
-    for (uint16_t y = 0; y < LCD_V_RES; y += 8) {
-        const uint16_t y2 = MIN((uint16_t)(y + 7), (uint16_t)(LCD_V_RES - 1));
-        const uint8_t raset[] = {
-            y >> 8, y & 0xFF,
-            y2 >> 8, y2 & 0xFF,
-        };
-        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_param(io_handle, ST7735_RASET, raset, sizeof(raset)));
-        ESP_ERROR_CHECK(esp_lcd_panel_io_tx_color(io_handle, ST7735_RAMWR, line, (y2 - y + 1) * LCD_H_RES * sizeof(uint16_t)));
-    }
-}
-
-static void st7735_init_black_tab_rot90(esp_lcd_panel_io_handle_t io_handle)
-{
-    const uint8_t frmctr[] = {0x01, 0x2C, 0x2D};
-    const uint8_t frmctr3[] = {0x01, 0x2C, 0x2D, 0x01, 0x2C, 0x2D};
-    const uint8_t invctr[] = {0x07};
-    const uint8_t pwctr1[] = {0xA2, 0x02, 0x84};
-    const uint8_t pwctr2[] = {0xC5};
-    const uint8_t pwctr3[] = {0x0A, 0x00};
-    const uint8_t pwctr4[] = {0x8A, 0x2A};
-    const uint8_t pwctr5[] = {0x8A, 0xEE};
-    const uint8_t vmctr1[] = {0x0E};
-    const uint8_t madctl_default[] = {MADCTL_MX | MADCTL_MY | MADCTL_RGB};
-    const uint8_t colmod[] = {0x05};
-    const uint8_t caset[] = {0x00, 0x00, 0x00, LCD_NATIVE_H_RES - 1};
-    const uint8_t raset[] = {0x00, 0x00, 0x00, LCD_NATIVE_V_RES - 1};
-    const uint8_t gamma_pos[] = {
-        0x02, 0x1C, 0x07, 0x12,
-        0x37, 0x32, 0x29, 0x2D,
-        0x29, 0x25, 0x2B, 0x39,
-        0x00, 0x01, 0x03, 0x10,
-    };
-    const uint8_t gamma_neg[] = {
-        0x03, 0x1D, 0x07, 0x06,
-        0x2E, 0x2C, 0x29, 0x2D,
-        0x2E, 0x2E, 0x37, 0x3F,
-        0x00, 0x00, 0x02, 0x10,
-    };
-    const uint8_t madctl_rot90[] = {MADCTL_MX | MADCTL_MV | MADCTL_RGB};
-
-    ESP_LOGI(TAG, "Initialize ST7735R panel with MicroPython init(2) compatible sequence");
-    st7735_tx_param(io_handle, ST7735_DISPOFF, NULL, 0);
-    st7735_tx_param(io_handle, ST7735_SWRESET, NULL, 0);
-    st7735_delay_ms(150);
-    st7735_tx_param(io_handle, ST7735_SLPOUT, NULL, 0);
-    st7735_delay_ms(500);
-    st7735_tx_param(io_handle, ST7735_FRMCTR1, frmctr, sizeof(frmctr));
-    st7735_tx_param(io_handle, ST7735_FRMCTR2, frmctr, sizeof(frmctr));
-    st7735_tx_param(io_handle, ST7735_FRMCTR3, frmctr3, sizeof(frmctr3));
-    st7735_tx_param(io_handle, ST7735_INVCTR, invctr, sizeof(invctr));
-    st7735_tx_param(io_handle, ST7735_PWCTR1, pwctr1, sizeof(pwctr1));
-    st7735_tx_param(io_handle, ST7735_PWCTR2, pwctr2, sizeof(pwctr2));
-    st7735_tx_param(io_handle, ST7735_PWCTR3, pwctr3, sizeof(pwctr3));
-    st7735_tx_param(io_handle, ST7735_PWCTR4, pwctr4, sizeof(pwctr4));
-    st7735_tx_param(io_handle, ST7735_PWCTR5, pwctr5, sizeof(pwctr5));
-    st7735_tx_param(io_handle, ST7735_VMCTR1, vmctr1, sizeof(vmctr1));
-    st7735_tx_param(io_handle, ST7735_INVOFF, NULL, 0);
-    st7735_tx_param(io_handle, ST7735_MADCTL, madctl_default, sizeof(madctl_default));
-    st7735_tx_param(io_handle, ST7735_COLMOD, colmod, sizeof(colmod));
-    st7735_tx_param(io_handle, ST7735_CASET, caset, sizeof(caset));
-    st7735_tx_param(io_handle, ST7735_RASET, raset, sizeof(raset));
-    st7735_tx_param(io_handle, ST7735_GMCTRP1, gamma_pos, sizeof(gamma_pos));
-    st7735_tx_param(io_handle, ST7735_GMCTRN1, gamma_neg, sizeof(gamma_neg));
-    st7735_tx_param(io_handle, ST7735_NORON, NULL, 0);
-    st7735_delay_ms(10);
-    st7735_tx_param(io_handle, ST7735_MADCTL, madctl_rot90, sizeof(madctl_rot90));
-    st7735_clear_black(io_handle);
-}
-
-static void lcd_display_on(void)
-{
-    if (s_lcd_display_on || !s_lcd_io_handle) {
-        return;
-    }
-
-    st7735_tx_param(s_lcd_io_handle, ST7735_DISPON, NULL, 0);
-    st7735_delay_ms(20);
-    s_lcd_display_on = true;
-}
-
-static esp_lcd_panel_io_handle_t lcd_init(void)
-{
-    ESP_LOGI(TAG, "Initialize SPI bus for ST7735 TFT");
-    spi_bus_config_t buscfg = {
-        .sclk_io_num = PIN_NUM_LCD_SCLK,
-        .mosi_io_num = PIN_NUM_LCD_MOSI,
-        .miso_io_num = PIN_NUM_LCD_MISO,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = LCD_H_RES * LCD_DRAW_BUF_LINES * sizeof(uint16_t),
-    };
-    ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &buscfg, SPI_DMA_CH_AUTO));
-
-    ESP_LOGI(TAG, "Install panel IO");
-    esp_lcd_panel_io_handle_t io_handle = NULL;
-    esp_lcd_panel_io_spi_config_t io_config = {
-        .dc_gpio_num = PIN_NUM_LCD_DC,
-        .cs_gpio_num = PIN_NUM_LCD_CS,
-        .pclk_hz = LCD_PIXEL_CLOCK_HZ,
-        .lcd_cmd_bits = LCD_CMD_BITS,
-        .lcd_param_bits = LCD_PARAM_BITS,
-        .spi_mode = 0,
-        .trans_queue_depth = 10,
-    };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST,
-                                             &io_config,
-                                             &io_handle));
-    s_lcd_io_handle = io_handle;
-    s_lcd_display_on = false;
-    s_lcd_first_flush_done = false;
-    st7735_init_black_tab_rot90(io_handle);
-
-    return io_handle;
-}
-
-static lv_display_t *lvgl_display_init(esp_lcd_panel_io_handle_t io_handle)
+/* LVGL display init */
+static lv_display_t *lvgl_display_init(void)
 {
 #if LCD_DRAW_BUF_LINES != LCD_V_RES
 #error "Triple/full refresh mode requires LCD_DRAW_BUF_LINES to equal LCD_V_RES"
@@ -1273,7 +357,7 @@ static lv_display_t *lvgl_display_init(esp_lcd_panel_io_handle_t io_handle)
                                        draw_buffer_sz);
     assert(res == LV_RESULT_OK);
     lv_display_set_3rd_draw_buffer(display, &s_draw_buf3);
-    lv_display_set_user_data(display, io_handle);
+    lv_display_set_user_data(display, hw_display_io());
     lv_display_set_flush_cb(display, lvgl_flush_cb);
 
     ESP_LOGI(TAG,
@@ -1287,6 +371,26 @@ static lv_display_t *lvgl_display_init(esp_lcd_panel_io_handle_t io_handle)
     return display;
 }
 
+/* LVGL input init */
+static lv_group_t *lvgl_input_init(lv_display_t *display)
+{
+    lv_group_t *group = lv_group_create();
+    assert(group);
+    lv_group_set_default(group);
+
+    lv_indev_t *indev = lv_indev_create();
+    assert(indev);
+    lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
+    lv_indev_set_display(indev, display);
+    lv_indev_set_group(indev, group);
+    lv_indev_set_read_cb(indev, keypad_read_cb);
+    lv_indev_set_long_press_time(indev, 360);
+    lv_indev_set_long_press_repeat_time(indev, 130);
+
+    return group;
+}
+
+/* Page names */
 static const char *const s_page_names[UI_PAGE_COUNT] = {
     "LIGHT",
     "THERM",
@@ -1305,6 +409,7 @@ static const char *const s_page_names[UI_PAGE_COUNT] = {
     "ABOUT",
 };
 
+/* UI colour constants */
 static const uint32_t UI_YELLOW = 0xF6D34A;
 static const uint32_t UI_BLACK = 0x1B1713;
 static const uint32_t UI_BROWN = 0x5C4220;
@@ -1314,9 +419,11 @@ static const int UI_HISTORY_CHART_PAD_X = 2;
 static const int UI_HISTORY_CHART_PAD_Y = 3;
 static const int UI_HISTORY_HEAD_SIZE = 7;
 
+/* Forward declarations */
 static void ui_refresh(void);
 static void ui_show_page(ui_page_t page, int dir);
 
+/* Error string helper */
 static const char *short_err(esp_err_t err)
 {
     switch (err) {
@@ -1337,6 +444,7 @@ static const char *short_err(esp_err_t err)
     }
 }
 
+/* UI widget builders */
 static lv_obj_t *ui_label(lv_obj_t *parent,
                           const char *text,
                           int y,
@@ -1514,8 +622,9 @@ static void ui_set_hint(const char *normal)
     if (!s_ui.hint) {
         return;
     }
+    const hw_board_state_t *board = hw_board_state();
     if (s_action_until_ms && (int32_t)(s_action_until_ms - lv_tick_get()) > 0) {
-        lv_label_set_text(s_ui.hint, s_board.action);
+        lv_label_set_text(s_ui.hint, board->action);
     }
     else {
         s_action_until_ms = 0;
@@ -1528,6 +637,7 @@ static unsigned ui_kb(size_t bytes)
     return (unsigned)((bytes + 512) / 1024);
 }
 
+/* About page */
 static void ui_build_about_page(lv_obj_t *page)
 {
     esp_chip_info_t chip_info;
@@ -1622,6 +732,7 @@ static void ui_build_about_page(lv_obj_t *page)
     s_ui.chart_series = NULL;
 }
 
+/* Build page content */
 static void ui_build_page_content(lv_obj_t *page)
 {
     char idx[10];
@@ -1662,6 +773,7 @@ static void ui_build_page_content(lv_obj_t *page)
     s_ui.hint = ui_label(page, "L/R page", 106, UI_BLACK, &lv_font_montserrat_10, LV_TEXT_ALIGN_CENTER);
 }
 
+/* Page animation */
 static void ui_anim_x(lv_obj_t *obj, int32_t start, int32_t end, lv_anim_completed_cb_t completed_cb)
 {
     lv_anim_t a;
@@ -1710,33 +822,36 @@ static void ui_show_page(ui_page_t page, int dir)
     }
 }
 
+/* UI refresh: map board state -> widgets */
 static void ui_refresh(void)
 {
     if (!s_ui.value || !s_ui.sub || !s_ui.hint) {
         return;
     }
 
+    const hw_board_state_t *board = hw_board_state();
+
     switch (s_ui.page_id) {
     case UI_PAGE_LIGHT:
-        lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(s_board.light_raw));
-        if (s_board.adc_ready) {
-            lv_label_set_text_fmt(s_ui.sub, "GPIO36  RAW %04d", s_board.light_raw);
+        lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(board->light_raw));
+        if (board->adc_ready) {
+            lv_label_set_text_fmt(s_ui.sub, "GPIO36  RAW %04d", board->light_raw);
         }
         else {
-            lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(s_board.last_adc_err));
+            lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(board->last_adc_err));
         }
         ui_set_hint("A sample   L/R");
         ui_refresh_history_chart();
         break;
     case UI_PAGE_THERM: {
         const bool therm_changed = s_ui.chart_history_version != s_therm_history_version;
-        if (therm_changed || !s_board.adc_ready || s_board.last_adc_err != ESP_OK) {
-            lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(s_board.temp_raw));
-            if (s_board.adc_ready) {
-                lv_label_set_text_fmt(s_ui.sub, "GPIO39  RAW %04d", s_board.temp_raw);
+        if (therm_changed || !board->adc_ready || board->last_adc_err != ESP_OK) {
+            lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(board->temp_raw));
+            if (board->adc_ready) {
+                lv_label_set_text_fmt(s_ui.sub, "GPIO39  RAW %04d", board->temp_raw);
             }
             else {
-                lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(s_board.last_adc_err));
+                lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(board->last_adc_err));
             }
         }
         ui_set_hint("A sample   L/R");
@@ -1744,101 +859,101 @@ static void ui_refresh(void)
         break;
     }
     case UI_PAGE_MOTION:
-        lv_label_set_text(s_ui.value, s_board.mpu_present ? s_board.gesture : "ABSENT");
-        if (s_board.mpu_present) {
-            lv_label_set_text_fmt(s_ui.sub, "P%+.1f  R%+.1f  0x%02X", s_board.pitch, s_board.roll, s_board.mpu_whoami);
+        lv_label_set_text(s_ui.value, board->mpu_present ? board->gesture : "ABSENT");
+        if (board->mpu_present) {
+            lv_label_set_text_fmt(s_ui.sub, "P%+.1f  R%+.1f  0x%02X", board->pitch, board->roll, board->mpu_whoami);
         }
         else {
-            lv_label_set_text_fmt(s_ui.sub, "MPU 0x68  %s", short_err(s_board.last_mpu_err));
+            lv_label_set_text_fmt(s_ui.sub, "MPU 0x68  %s", short_err(board->last_mpu_err));
         }
         ui_set_hint("A rescan   L/R");
-        ui_set_bar(s_board.mpu_present ? 100 : 0);
+        ui_set_bar(board->mpu_present ? 100 : 0);
         break;
     case UI_PAGE_LED1:
-        lv_label_set_text(s_ui.value, s_board.led1_on ? "ON" : "OFF");
-        lv_label_set_text(s_ui.sub, s_board.gd32_present ? "GD32 0x40  REG A0" : "GD32 0x40 ABSENT");
+        lv_label_set_text(s_ui.value, board->led1_on ? "ON" : "OFF");
+        lv_label_set_text(s_ui.sub, board->gd32_present ? "GD32 0x40  REG A0" : "GD32 0x40 ABSENT");
         ui_set_hint("A toggle   B off");
-        ui_set_bar(s_board.led1_on ? 100 : 0);
+        ui_set_bar(board->led1_on ? 100 : 0);
         break;
     case UI_PAGE_LED2:
-        lv_label_set_text(s_ui.value, s_board.led2_on ? "ON" : "OFF");
-        lv_label_set_text(s_ui.sub, s_board.gd32_present ? "GD32 0x40  REG A1" : "GD32 0x40 ABSENT");
+        lv_label_set_text(s_ui.value, board->led2_on ? "ON" : "OFF");
+        lv_label_set_text(s_ui.sub, board->gd32_present ? "GD32 0x40  REG A1" : "GD32 0x40 ABSENT");
         ui_set_hint("A toggle   B off");
-        ui_set_bar(s_board.led2_on ? 100 : 0);
+        ui_set_bar(board->led2_on ? 100 : 0);
         break;
     case UI_PAGE_BUZZER:
         lv_label_set_text_fmt(s_ui.value, "%lu Hz", (unsigned long)s_buzzer_freq_hz);
-        lv_label_set_text(s_ui.sub, s_board.buzzer_ready ? "GPIO14 PWM" : "PWM INIT FAIL");
+        lv_label_set_text(s_ui.sub, board->buzzer_ready ? "GPIO14 PWM" : "PWM INIT FAIL");
         ui_set_hint("U/D Hz  A beep  B stop");
         ui_set_bar((int)((s_buzzer_freq_hz - 440) * 100 / (1760 - 440)));
         break;
     case UI_PAGE_MOTOR1:
     case UI_PAGE_MOTOR2: {
         const uint8_t motor = s_ui.page_id == UI_PAGE_MOTOR1 ? 0 : 1;
-        lv_label_set_text_fmt(s_ui.value, "%s %03u", s_board.motor_running[motor] ? "VOUT" : "PWM", s_board.motor_speed[motor]);
-        if (s_board.gd32_present) {
-            lv_label_set_text_fmt(s_ui.sub, "REG %s  DIR %u", motor == 0 ? "0E" : "06", s_board.motor_dir[motor] ? 1 : 0);
+        lv_label_set_text_fmt(s_ui.value, "%s %03u", board->motor_running[motor] ? "VOUT" : "PWM", board->motor_speed[motor]);
+        if (board->gd32_present) {
+            lv_label_set_text_fmt(s_ui.sub, "REG %s  DIR %u", motor == 0 ? "0E" : "06", board->motor_dir[motor] ? 1 : 0);
         }
         else {
             lv_label_set_text(s_ui.sub, "GD32 0x40 ABSENT");
         }
-        ui_set_hint(s_board.motor_running[motor] ? "U/D PWM  A off  B stop" : "U/D PWM  A out  B dir");
-        ui_set_bar((int)s_board.motor_speed[motor] * 100 / 255);
+        ui_set_hint(board->motor_running[motor] ? "U/D PWM  A off  B stop" : "U/D PWM  A out  B dir");
+        ui_set_bar((int)board->motor_speed[motor] * 100 / 255);
         break;
     }
     case UI_PAGE_SD:
-        lv_label_set_text(s_ui.value, s_board.sd_mounted ? "MOUNTED" : "NO CARD");
-        if (s_board.sd_mounted) {
-            lv_label_set_text_fmt(s_ui.sub, "%s  %luMB", s_board.sd_name, (unsigned long)s_board.sd_mb);
+        lv_label_set_text(s_ui.value, board->sd_mounted ? "MOUNTED" : "NO CARD");
+        if (board->sd_mounted) {
+            lv_label_set_text_fmt(s_ui.sub, "%s  %luMB", board->sd_name, (unsigned long)board->sd_mb);
         }
         else {
-            lv_label_set_text_fmt(s_ui.sub, "GPIO22 CS  %s", short_err(s_board.last_sd_err));
+            lv_label_set_text_fmt(s_ui.sub, "GPIO22 CS  %s", short_err(board->last_sd_err));
         }
-        ui_set_hint(s_board.sd_mounted ? "B unmount  L/R" : "A rescan   L/R");
-        ui_set_bar(s_board.sd_mounted ? 100 : 0);
+        ui_set_hint(board->sd_mounted ? "B unmount  L/R" : "A rescan   L/R");
+        ui_set_bar(board->sd_mounted ? 100 : 0);
         break;
     case UI_PAGE_GPIO25:
-        lv_label_set_text_fmt(s_ui.value, "%s %03u", s_board.ext_out[0] ? "PWM" : "OFF", s_board.ext_pwm[0]);
-        lv_label_set_text(s_ui.sub, s_board.ext_pwm_ready ? "GPIO25 LEDC" : "PWM INIT FAIL");
+        lv_label_set_text_fmt(s_ui.value, "%s %03u", board->ext_out[0] ? "PWM" : "OFF", board->ext_pwm[0]);
+        lv_label_set_text(s_ui.sub, board->ext_pwm_ready ? "GPIO25 LEDC" : "PWM INIT FAIL");
         ui_set_hint("U/D duty  A toggle  B off");
-        ui_set_bar((int)s_board.ext_pwm[0] * 100 / EXT_PWM_DUTY_MAX);
+        ui_set_bar((int)board->ext_pwm[0] * 100 / EXT_PWM_DUTY_MAX);
         break;
     case UI_PAGE_GPIO26:
-        lv_label_set_text_fmt(s_ui.value, "%s %03u", s_board.ext_out[1] ? "PWM" : "OFF", s_board.ext_pwm[1]);
-        lv_label_set_text(s_ui.sub, s_board.ext_pwm_ready ? "GPIO26 LEDC" : "PWM INIT FAIL");
+        lv_label_set_text_fmt(s_ui.value, "%s %03u", board->ext_out[1] ? "PWM" : "OFF", board->ext_pwm[1]);
+        lv_label_set_text(s_ui.sub, board->ext_pwm_ready ? "GPIO26 LEDC" : "PWM INIT FAIL");
         ui_set_hint("U/D duty  A toggle  B off");
-        ui_set_bar((int)s_board.ext_pwm[1] * 100 / EXT_PWM_DUTY_MAX);
+        ui_set_bar((int)board->ext_pwm[1] * 100 / EXT_PWM_DUTY_MAX);
         break;
     case UI_PAGE_ADC32:
-        lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(s_board.ext_raw[0]));
-        if (s_board.adc_ready) {
-            lv_label_set_text_fmt(s_ui.sub, "GPIO32 RAW %04d", s_board.ext_raw[0]);
+        lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(board->ext_raw[0]));
+        if (board->adc_ready) {
+            lv_label_set_text_fmt(s_ui.sub, "GPIO32 RAW %04d", board->ext_raw[0]);
         }
         else {
-            lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(s_board.last_adc_err));
+            lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(board->last_adc_err));
         }
         ui_set_hint("A sample   L/R");
-        ui_set_bar(pct_from_raw(s_board.ext_raw[0]));
+        ui_set_bar(pct_from_raw(board->ext_raw[0]));
         break;
     case UI_PAGE_ADC33:
-        lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(s_board.ext_raw[1]));
-        if (s_board.adc_ready) {
-            lv_label_set_text_fmt(s_ui.sub, "GPIO33 RAW %04d", s_board.ext_raw[1]);
+        lv_label_set_text_fmt(s_ui.value, "%d%%", pct_from_raw(board->ext_raw[1]));
+        if (board->adc_ready) {
+            lv_label_set_text_fmt(s_ui.sub, "GPIO33 RAW %04d", board->ext_raw[1]);
         }
         else {
-            lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(s_board.last_adc_err));
+            lv_label_set_text_fmt(s_ui.sub, "ADC FAIL  %s", short_err(board->last_adc_err));
         }
         ui_set_hint("A sample   L/R");
-        ui_set_bar(pct_from_raw(s_board.ext_raw[1]));
+        ui_set_bar(pct_from_raw(board->ext_raw[1]));
         break;
     case UI_PAGE_SYSTEM:
-        lv_label_set_text(s_ui.value, s_board.i2c_ready ? "I2C OK" : "I2C --");
+        lv_label_set_text(s_ui.value, board->i2c_ready ? "I2C OK" : "I2C --");
         lv_label_set_text_fmt(s_ui.sub,
                               "G %s  M %s",
-                              s_board.gd32_present ? "OK" : short_err(s_board.last_gd32_err),
-                              s_board.mpu_present ? "OK" : short_err(s_board.last_mpu_err));
+                              board->gd32_present ? "OK" : short_err(board->last_gd32_err),
+                              board->mpu_present ? "OK" : short_err(board->last_mpu_err));
         ui_set_hint("A rescan   L/R");
-        ui_set_bar(s_board.i2c_ready ? 100 : 0);
+        ui_set_bar(board->i2c_ready ? 100 : 0);
         break;
     case UI_PAGE_ABOUT:
         break;
@@ -1847,11 +962,14 @@ static void ui_refresh(void)
     }
 }
 
+/* UI action handlers */
+
 static void ui_motor_stop(uint8_t motor)
 {
-    esp_err_t err = gd32_motor_set(motor, s_board.motor_dir[motor], 0);
+    hw_board_state_t *board = hw_board_state_mut();
+    esp_err_t err = hw_gd32_motor_set(motor, board->motor_dir[motor], 0);
     if (err == ESP_OK) {
-        s_board.motor_running[motor] = false;
+        board->motor_running[motor] = false;
         set_action(motor == 0 ? "Motor1 stopped" : "Motor2 stopped");
     }
     else {
@@ -1861,19 +979,20 @@ static void ui_motor_stop(uint8_t motor)
 
 static void ui_motor_toggle(uint8_t motor)
 {
-    if (s_board.motor_running[motor]) {
+    hw_board_state_t *board = hw_board_state_mut();
+    if (board->motor_running[motor]) {
         ui_motor_stop(motor);
         return;
     }
-    if (s_board.motor_speed[motor] == 0) {
-        s_board.last_gd32_err = ESP_ERR_INVALID_ARG;
+    if (board->motor_speed[motor] == 0) {
+        board->last_gd32_err = ESP_ERR_INVALID_ARG;
         set_action("PWM is zero");
         return;
     }
 
-    esp_err_t err = gd32_motor_set(motor, s_board.motor_dir[motor], s_board.motor_speed[motor]);
+    esp_err_t err = hw_gd32_motor_set(motor, board->motor_dir[motor], board->motor_speed[motor]);
     if (err == ESP_OK) {
-        s_board.motor_running[motor] = true;
+        board->motor_running[motor] = true;
         set_action(motor == 0 ? "Motor1 output" : "Motor2 output");
     }
     else {
@@ -1883,24 +1002,26 @@ static void ui_motor_toggle(uint8_t motor)
 
 static esp_err_t ui_ext_toggle(uint8_t index)
 {
-    if (s_board.ext_out[index]) {
-        esp_err_t err = ext_output_set(index, false);
+    hw_board_state_t *board = hw_board_state_mut();
+    if (board->ext_out[index]) {
+        esp_err_t err = hw_extio_set(index, false);
         set_action(err == ESP_OK ? (index == 0 ? "GPIO25 off" : "GPIO26 off") : "PWM cmd fail");
         return err;
     }
 
-    if (s_board.ext_pwm[index] == 0) {
+    if (board->ext_pwm[index] == 0) {
         set_action("Duty is zero");
         return ESP_ERR_INVALID_ARG;
     }
 
-    esp_err_t err = ext_output_set(index, true);
+    esp_err_t err = hw_extio_set(index, true);
     set_action(err == ESP_OK ? (index == 0 ? "GPIO25 PWM" : "GPIO26 PWM") : "PWM cmd fail");
     return err;
 }
 
 static void ui_action(void)
 {
+    hw_board_state_t *board = hw_board_state_mut();
     esp_err_t err = ESP_OK;
 
     switch (s_ui.page_id) {
@@ -1908,44 +1029,39 @@ static void ui_action(void)
     case UI_PAGE_THERM:
     case UI_PAGE_ADC32:
     case UI_PAGE_ADC33:
-        err = adc_read_sensors();
+        hw_adc_update();
+        err = board->last_adc_err;
         set_action(err == ESP_OK ? "Sampled" : "ADC read fail");
         break;
     case UI_PAGE_MOTION:
-        mpu_probe_and_init(true);
-        err = s_board.mpu_present ? ESP_OK : s_board.last_mpu_err;
-        set_action(s_board.mpu_present ? "MPU ready" : "MPU absent");
+        hw_mpu_probe(true);
+        err = board->mpu_present ? ESP_OK : board->last_mpu_err;
+        set_action(board->mpu_present ? "MPU ready" : "MPU absent");
         break;
     case UI_PAGE_LED1:
-        err = gd32_write_reg(GD32_LED1_REG, s_board.led1_on ? 0 : 1);
-        if (err == ESP_OK) {
-            s_board.led1_on = !s_board.led1_on;
-        }
+        err = hw_gd32_set_led(0, !board->led1_on);
         set_action(err == ESP_OK ? "LED1 toggled" : "LED cmd fail");
         break;
     case UI_PAGE_LED2:
-        err = gd32_write_reg(GD32_LED2_REG, s_board.led2_on ? 0 : 1);
-        if (err == ESP_OK) {
-            s_board.led2_on = !s_board.led2_on;
-        }
+        err = hw_gd32_set_led(1, !board->led2_on);
         set_action(err == ESP_OK ? "LED2 toggled" : "LED cmd fail");
         break;
     case UI_PAGE_BUZZER:
-        buzzer_beep(s_buzzer_freq_hz, 140);
-        set_action(s_board.buzzer_ready ? "Beep" : "Buzzer init fail");
+        hw_buzzer_beep(s_buzzer_freq_hz, 140);
+        set_action(board->buzzer_ready ? "Beep" : "Buzzer init fail");
         break;
     case UI_PAGE_MOTOR1:
         ui_motor_toggle(0);
-        err = s_board.last_gd32_err;
+        err = board->last_gd32_err;
         break;
     case UI_PAGE_MOTOR2:
         ui_motor_toggle(1);
-        err = s_board.last_gd32_err;
+        err = board->last_gd32_err;
         break;
     case UI_PAGE_SD:
-        sd_try_mount();
-        err = s_board.sd_mounted ? ESP_OK : s_board.last_sd_err;
-        set_action(s_board.sd_mounted ? "SD mounted" : "No SD card");
+        hw_sd_try_mount();
+        err = board->sd_mounted ? ESP_OK : board->last_sd_err;
+        set_action(board->sd_mounted ? "SD mounted" : "No SD card");
         break;
     case UI_PAGE_GPIO25:
         err = ui_ext_toggle(0);
@@ -1954,29 +1070,29 @@ static void ui_action(void)
         err = ui_ext_toggle(1);
         break;
     case UI_PAGE_SYSTEM:
-        i2c_probe_devices(true);
-        err = s_board.i2c_ready ? ESP_OK : ESP_ERR_INVALID_STATE;
-        set_action(s_board.i2c_ready ? "Rescanned" : "I2C init fail");
+        hw_gd32_probe(true);
+        hw_mpu_probe(true);
+        err = board->i2c_ready ? ESP_OK : ESP_ERR_INVALID_STATE;
+        set_action(board->i2c_ready ? "Rescanned" : "I2C init fail");
         break;
     default:
         break;
     }
 
     if (err == ESP_OK && s_ui.page_id != UI_PAGE_BUZZER) {
-        buzzer_beep(660, 35);
+        hw_buzzer_beep(660, 35);
     }
     ui_refresh();
 }
 
 static void ui_cancel(void)
 {
+    hw_board_state_t *board = hw_board_state_mut();
+
     switch (s_ui.page_id) {
     case UI_PAGE_LED1:
-        if (s_board.led1_on) {
-            esp_err_t err = gd32_write_reg(GD32_LED1_REG, 0);
-            if (err == ESP_OK) {
-                s_board.led1_on = false;
-            }
+        if (board->led1_on) {
+            esp_err_t err = hw_gd32_set_led(0, false);
             set_action(err == ESP_OK ? "LED1 off" : "LED cmd fail");
         }
         else {
@@ -1984,11 +1100,8 @@ static void ui_cancel(void)
         }
         break;
     case UI_PAGE_LED2:
-        if (s_board.led2_on) {
-            esp_err_t err = gd32_write_reg(GD32_LED2_REG, 0);
-            if (err == ESP_OK) {
-                s_board.led2_on = false;
-            }
+        if (board->led2_on) {
+            esp_err_t err = hw_gd32_set_led(1, false);
             set_action(err == ESP_OK ? "LED2 off" : "LED cmd fail");
         }
         else {
@@ -1996,44 +1109,44 @@ static void ui_cancel(void)
         }
         break;
     case UI_PAGE_BUZZER:
-        buzzer_stop();
+        hw_buzzer_stop();
         set_action("Buzzer stop");
         break;
     case UI_PAGE_SD:
-        sd_unmount();
+        hw_sd_unmount();
         break;
     case UI_PAGE_GPIO25:
         {
-            esp_err_t err = ext_output_set(0, false);
+            esp_err_t err = hw_extio_set(0, false);
             set_action(err == ESP_OK ? "GPIO25 off" : "PWM cmd fail");
         }
         break;
     case UI_PAGE_GPIO26:
         {
-            esp_err_t err = ext_output_set(1, false);
+            esp_err_t err = hw_extio_set(1, false);
             set_action(err == ESP_OK ? "GPIO26 off" : "PWM cmd fail");
         }
         break;
     case UI_PAGE_MOTOR1:
-        if (s_board.motor_running[0]) {
+        if (board->motor_running[0]) {
             ui_motor_stop(0);
         }
         else {
-            s_board.motor_dir[0] = !s_board.motor_dir[0];
+            board->motor_dir[0] = !board->motor_dir[0];
             set_action("Motor1 dir");
         }
         break;
     case UI_PAGE_MOTOR2:
-        if (s_board.motor_running[1]) {
+        if (board->motor_running[1]) {
             ui_motor_stop(1);
         }
         else {
-            s_board.motor_dir[1] = !s_board.motor_dir[1];
+            board->motor_dir[1] = !board->motor_dir[1];
             set_action("Motor2 dir");
         }
         break;
     default:
-        buzzer_stop();
+        hw_buzzer_stop();
         set_action("Canceled");
         break;
     }
@@ -2042,6 +1155,8 @@ static void ui_cancel(void)
 
 static void ui_adjust(int step)
 {
+    hw_board_state_t *board = hw_board_state_mut();
+
     switch (s_ui.page_id) {
     case UI_PAGE_BUZZER: {
         int freq = (int)s_buzzer_freq_hz + step * 110;
@@ -2052,10 +1167,10 @@ static void ui_adjust(int step)
     case UI_PAGE_MOTOR1:
     case UI_PAGE_MOTOR2: {
         const uint8_t motor = s_ui.page_id == UI_PAGE_MOTOR1 ? 0 : 1;
-        int speed = s_board.motor_speed[motor] + step * 10;
-        s_board.motor_speed[motor] = MAX(0, MIN(speed, 255));
-        if (s_board.motor_running[motor]) {
-            esp_err_t err = gd32_motor_set(motor, s_board.motor_dir[motor], s_board.motor_speed[motor]);
+        int speed = board->motor_speed[motor] + step * 10;
+        board->motor_speed[motor] = MAX(0, MIN(speed, 255));
+        if (board->motor_running[motor]) {
+            esp_err_t err = hw_gd32_motor_set(motor, board->motor_dir[motor], board->motor_speed[motor]);
             set_action(err == ESP_OK ? "Power set" : "Motor cmd fail");
         }
         else {
@@ -2066,14 +1181,14 @@ static void ui_adjust(int step)
     case UI_PAGE_GPIO25:
     case UI_PAGE_GPIO26: {
         const uint8_t index = s_ui.page_id == UI_PAGE_GPIO25 ? 0 : 1;
-        int duty = s_board.ext_pwm[index] + step * 16;
-        s_board.ext_pwm[index] = MAX(0, MIN(duty, EXT_PWM_DUTY_MAX));
-        if (!s_board.ext_pwm_ready) {
+        int duty = board->ext_pwm[index] + step * 16;
+        board->ext_pwm[index] = MAX(0, MIN(duty, EXT_PWM_DUTY_MAX));
+        if (!board->ext_pwm_ready) {
             set_action("PWM init fail");
         }
-        else if (s_board.ext_out[index]) {
-            esp_err_t err = ext_output_set(index, true);
-            set_action(err == ESP_OK ? (s_board.ext_out[index] ? "Duty set" : "Duty zero") : "PWM cmd fail");
+        else if (board->ext_out[index]) {
+            esp_err_t err = hw_extio_set(index, true);
+            set_action(err == ESP_OK ? (board->ext_out[index] ? "Duty set" : "Duty zero") : "PWM cmd fail");
         }
         else {
             set_action("Duty set");
@@ -2156,24 +1271,7 @@ static void ui_create(lv_group_t *group)
     ui_show_page(UI_PAGE_LIGHT, 0);
 }
 
-static lv_group_t *lvgl_input_init(lv_display_t *display)
-{
-    lv_group_t *group = lv_group_create();
-    assert(group);
-    lv_group_set_default(group);
-
-    lv_indev_t *indev = lv_indev_create();
-    assert(indev);
-    lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
-    lv_indev_set_display(indev, display);
-    lv_indev_set_group(indev, group);
-    lv_indev_set_read_cb(indev, keypad_read_cb);
-    lv_indev_set_long_press_time(indev, 360);
-    lv_indev_set_long_press_repeat_time(indev, 130);
-
-    return group;
-}
-
+/* LVGL task */
 static void lvgl_task(void *arg)
 {
     lv_group_t *group = (lv_group_t *)arg;
@@ -2181,18 +1279,18 @@ static void lvgl_task(void *arg)
 
     ESP_LOGI(TAG, "Start Xiaomiao hardware dashboard");
     ui_create(group);
-    s_lcd_first_flush_done = false;
     lv_refr_now(NULL);
-    for (uint8_t i = 0; i < 100 && !s_lcd_first_flush_done; ++i) {
+    for (uint8_t i = 0; i < 100 && !hw_display_first_flush_done(); ++i) {
         vTaskDelay(pdMS_TO_TICKS(1));
     }
-    lcd_display_on();
+    hw_display_on();
 
     while (true) {
-        hardware_process_timers();
+        hw_board_process_timers();
         if (lv_tick_elaps(last_update_ms) >= UI_REFRESH_PERIOD_MS) {
             last_update_ms = lv_tick_get();
-            hardware_update();
+            hw_board_update();
+            accumulate_adc_to_history();
             ui_refresh();
         }
 
@@ -2202,26 +1300,45 @@ static void lvgl_task(void *arg)
         usleep(delay_ms * 1000);
     }
 }
+#endif /* !CONFIG_XIAOMIAO_USE_SDL */
 
+/* Entry point */
 void app_main(void)
 {
+#if CONFIG_XIAOMIAO_USE_SDL
+    ESP_LOGI(TAG, "Xiaomiao SDL3 demo boot");
+
+    /* Hardware init (SPI2, I2C0, ADC, buzzer, ext-IO, display, buttons) */
+    hw_board_init();
+
+    /* SDL3 demo init */
+    sdl_demo_create();
+
+    /* Start the SDL demo task */
+    BaseType_t ret = xTaskCreate(sdl_demo_task,
+                                 "sdl_demo",
+                                 LVGL_TASK_STACK_SIZE,
+                                 NULL,
+                                 LVGL_TASK_PRIORITY,
+                                 NULL);
+    ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
+#else
     ESP_LOGI(TAG, "Xiaomiao LVGL 9.5 dashboard boot");
 
     sensor_history_init();
-    buttons_init();
 
-    esp_lcd_panel_io_handle_t io_handle = lcd_init();
-    hardware_init();
+    /* Hardware init (SPI2, I2C0, ADC, buzzer, ext-IO, display, buttons) */
+    hw_board_init();
 
+    /* LVGL init */
     lv_init();
-    lv_display_t *display = lvgl_display_init(io_handle);
+    lv_display_t *display = lvgl_display_init();
     lv_group_t *group = lvgl_input_init(display);
 
-    esp_lcd_panel_io_callbacks_t callbacks = {
-        .on_color_trans_done = lcd_flush_ready_cb,
-    };
-    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io_handle, &callbacks, display));
+    /* Register flush-ready callback: hw_display SPI ISR -> lv_display_flush_ready */
+    hw_display_set_flush_ready_cb(lvgl_flush_ready_bridge, display);
 
+    /* LVGL 1 ms tick timer */
     const esp_timer_create_args_t tick_timer_args = {
         .callback = lvgl_tick_cb,
         .name = "lvgl_tick",
@@ -2230,6 +1347,7 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_timer_create(&tick_timer_args, &tick_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(tick_timer, LVGL_TICK_PERIOD_MS * 1000));
 
+    /* Start the LVGL task */
     BaseType_t ret = xTaskCreate(lvgl_task,
                                  "lvgl",
                                  LVGL_TASK_STACK_SIZE,
@@ -2237,4 +1355,5 @@ void app_main(void)
                                  LVGL_TASK_PRIORITY,
                                  NULL);
     ESP_ERROR_CHECK(ret == pdPASS ? ESP_OK : ESP_FAIL);
+#endif
 }

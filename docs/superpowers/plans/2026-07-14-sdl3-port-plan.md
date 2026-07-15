@@ -48,7 +48,7 @@
 
 目标：把 `main/main.c` 里的硬件逻辑抽进 `components/hardware/`，`main.c` 临时仍用 LVGL 调它们，确保硬件行为零回归。每个 `hw_*.c` 从 `main.c` 整段搬迁 + 改为非 static（对外暴露）+ 头文件声明接口。
 
-## Task P1.0: 建 hardware 组件骨架 + CMakeLists
+## Task 1: 建 hardware 组件骨架 + CMakeLists
 
 **Files:**
 - Create: `components/hardware/CMakeLists.txt`
@@ -93,7 +93,7 @@ git commit -m "scaffold: add components/hardware component skeleton"
 
 ---
 
-## Task P1.1: hw_board.h — 状态 struct + 顶层接口
+## Task 2: hw_board.h — 状态 struct + 顶层接口
 
 **Files:**
 - Create: `components/hardware/include/hw_board.h`
@@ -129,7 +129,7 @@ git commit -m "hardware: add hw_board.h state struct + top-level API"
 
 ---
 
-## Task P1.2: hw_i2c — I2C 总线 + 读写原语
+## Task 3: hw_i2c — I2C 总线 + 读写原语
 
 **Files:**
 - Create: `components/hardware/include/hw_i2c.h`
@@ -185,7 +185,7 @@ git commit -m "hardware: decouple hw_i2c (bus + read/write primitives)"
 
 ---
 
-## Task P1.3: hw_display — SPI2/ST7735 显示 + flush 暴露
+## Task 4: hw_display — SPI2/ST7735 显示 + flush 暴露
 
 **Files:**
 - Create: `components/hardware/include/hw_display.h`
@@ -234,7 +234,7 @@ git commit -m "hardware: decouple hw_display (SPI2/ST7735 + flush)"
 
 ---
 
-## Task P1.4: hw_input — 6 GPIO 按键
+## Task 5: hw_input — 6 GPIO 按键
 
 **Files:**
 - Create: `components/hardware/include/hw_input.h`
@@ -263,7 +263,7 @@ git commit -m "hardware: decouple hw_input (6 GPIO buttons)"
 
 ---
 
-## Task P1.5: hw_gd32 — LED + 电机协议
+## Task 6: hw_gd32 — LED + 电机协议
 
 **Files:**
 - Create: `components/hardware/include/hw_gd32.h`
@@ -293,7 +293,7 @@ git commit -m "hardware: decouple hw_gd32 (LED + motor I2C protocol)"
 
 ---
 
-## Task P1.6: hw_mpu — MPU6050
+## Task 7: hw_mpu — MPU6050
 
 **Files:**
 - Create: `components/hardware/include/hw_mpu.h`
@@ -318,7 +318,7 @@ git commit -m "hardware: decouple hw_mpu (MPU6050)"
 
 ---
 
-## Task P1.7: hw_adc — 光照/热敏/扩展 ADC
+## Task 8: hw_adc — 光照/热敏/扩展 ADC
 
 **Files:**
 - Create: `components/hardware/include/hw_adc.h`
@@ -343,7 +343,7 @@ git commit -m "hardware: decouple hw_adc (light/therm/ext ADC)"
 
 ---
 
-## Task P1.8: hw_buzzer + hw_extio + hw_sd
+## Task 9: hw_buzzer + hw_extio + hw_sd
 
 **Files:**
 - Create: `components/hardware/include/hw_buzzer.h`、`hw_extio.h`、`hw_sd.h`
@@ -370,7 +370,7 @@ git commit -m "hardware: decouple hw_buzzer, hw_extio, hw_sd"
 
 ---
 
-## Task P1.9: hw_board.c — 顶层 init/update/process_timers + 状态全局
+## Task 10: hw_board.c — 顶层 init/update/process_timers + 状态全局
 
 **Files:**
 - Create: `components/hardware/hw_board.c`
@@ -398,7 +398,7 @@ git commit -m "hardware: implement hw_board top-level init/update/process_timers
 
 ---
 
-## Task P1.10: main.c 改用 hardware 组件（LVGL 仍保留，验证零回归）
+## Task 11: main.c 改用 hardware 组件（LVGL 仍保留，验证零回归）
 
 **Files:**
 - Modify: `main/CMakeLists.txt`（加 `REQUIRES hardware`）
@@ -433,7 +433,7 @@ git commit -m "refactor: main.c uses components/hardware (LVGL retained, behavio
 
 # Phase P2 — 引入 SDL3 + BSP board 适配 + 验证风险点
 
-## Task P2.1: 加 georgik/sdl 组件依赖
+## Task 12: 加 georgik/sdl 组件依赖
 
 **Files:**
 - Modify: `main/idf_component.yml`
@@ -465,7 +465,7 @@ git commit -m "deps: add georgik/sdl component"
 
 ---
 
-## Task P2.2: clone esp_bsp_sdl + 验证 board.c 结构（风险点）
+## Task 13: clone esp_bsp_sdl + 验证 board.c 结构（风险点）
 
 **Files:**
 - Create: `components/esp_bsp_sdl/`（git clone）
@@ -500,7 +500,7 @@ git commit -m "deps: vendor esp_bsp_sdl; board.c strategy = <直接 esp_lcd / �
 
 ---
 
-## Task P2.3: 写 esp_bsp_sdl_xiaomiao.c board 适配
+## Task 14: 写 esp_bsp_sdl_xiaomiao.c board 适配
 
 **Files:**
 - Create: `components/esp_bsp_sdl/src/boards/esp_bsp_sdl_xiaomiao.c`
@@ -549,7 +549,7 @@ git commit -m "bsp: add esp_bsp_sdl_xiaomiao board adapter (ST7735 via hw_displa
 
 # Phase P3 — 最小 SDL3 demo（一屏 + 一按键）
 
-## Task P3.1: sdl_font.h/.c 最小字体封装
+## Task 15: sdl_font.h/.c 最小字体封装
 
 **Files:**
 - Create: `main/sdl_font.h`、`main/sdl_font.c`
@@ -577,7 +577,7 @@ git commit -m "sdl: add minimal font wrapper (SDL3 built-in 8x8)"
 
 ---
 
-## Task P3.2: sdl_demo.h/.c 骨架 + 最小 demo（一屏 + 一按键）
+## Task 16: sdl_demo.h/.c 骨架 + 最小 demo（一屏 + 一按键）
 
 **Files:**
 - Create: `main/sdl_demo.h`、`main/sdl_demo.c`
@@ -644,7 +644,7 @@ git commit -m "sdl: minimal demo (one screen + live ADC), build switch to LVGL"
 
 P4 按"输入→各页→删LVGL"分任务。每页实现 = 渲染 + 事件处理（A/B）+ 调对应 `hw_*`。
 
-## Task P4.1: 输入集成（6 按键 → SDL3 事件）
+## Task 17: 输入集成（6 按键 → SDL3 事件）
 
 **Files:**
 - Modify: `main/sdl_demo.c`
@@ -671,7 +671,7 @@ git commit -m "sdl: wire 6 buttons to SDL3 events + page nav skeleton"
 
 ---
 
-## Task P4.2: LIGHT / THERM 页（折线图 + 历史）
+## Task 18: LIGHT / THERM 页（折线图 + 历史）
 
 **Files:**
 - Modify: `main/sdl_demo.c`（加页渲染 + history 数组——history 从 main.c 搬到 sdl_demo.c 或新 `sdl_demo_history.c`）
@@ -701,7 +701,7 @@ git commit -m "sdl: LIGHT/THERM pages with line-chart history"
 
 ---
 
-## Task P4.3: MOTION 页（MPU6050）
+## Task 19: MOTION 页（MPU6050）
 
 - [ ] **Step 1:** 读 `hw_board_state()` 的 acc/gyro/pitch/roll/gesture，绘制数值 + gesture 文本。
 - [ ] **Step 2:** 烧录验证 MPU 在线时数值动，离线显示 ABSENT。
@@ -709,7 +709,7 @@ git commit -m "sdl: LIGHT/THERM pages with line-chart history"
 
 ---
 
-## Task P4.4: LED1/LED2 + BUZZER 页
+## Task 20: LED1/LED2 + BUZZER 页
 
 - [ ] **Step 1:** LED 页 A 键调 `hw_gd32_set_led` toggle；BUZZER 页 A 调 `hw_buzzer_beep`、B 调 `hw_buzzer_stop`。
 - [ ] **Step 2:** 烧录验证 LED 点灭、蜂鸣器响。
@@ -717,7 +717,7 @@ git commit -m "sdl: LIGHT/THERM pages with line-chart history"
 
 ---
 
-## Task P4.5: MOTOR1/MOTOR2 页
+## Task 21: MOTOR1/MOTOR2 页
 
 - [ ] **Step 1:** A 键 `hw_gd32_motor_set(motor, dir, speed)` 正/反/停切换，B 键调速（沿用 `ui_adjust` 的步进逻辑）。
 - [ ] **Step 2:** 烧录验证电机转（**注意：测电机时按 README 建议拔电机或小心**）。
@@ -725,7 +725,7 @@ git commit -m "sdl: LIGHT/THERM pages with line-chart history"
 
 ---
 
-## Task P4.6: SD + GPIO25/26 + ADC32/33 页
+## Task 22: SD + GPIO25/26 + ADC32/33 页
 
 - [ ] **Step 1:** SD 页调 `hw_sd_info` 显示卡名容量，A 重挂载；GPIO25/26 页 A 调 `hw_extio_set`/`hw_extio_set_pwm`；ADC32/33 页读 `hw_adc_read_ext` 画百分比条。
 - [ ] **Step 2:** 烧录验证 SD 挂载信息、扩展 IO 输出、ADC 数值。
@@ -733,7 +733,7 @@ git commit -m "sdl: LIGHT/THERM pages with line-chart history"
 
 ---
 
-## Task P4.7: SYSTEM + ABOUT 页 + 状态栏 + action 提示
+## Task 23: SYSTEM + ABOUT 页 + 状态栏 + action 提示
 
 - [ ] **Step 1:** SYSTEM 页显示 CPU/flash/PSRAM/IDF 版本/空闲堆（`heap_caps_get_free_size`）/各外设 last err；ABOUT 页可滚动静态文本。顶部状态栏（GD32/MPU/SD present），底部 action 提示（`set_action` 等价，~850ms）。
 - [ ] **Step 2:** 烧录验证全部 15 页遍历 + 状态栏 + 提示。
@@ -741,7 +741,7 @@ git commit -m "sdl: LIGHT/THERM pages with line-chart history"
 
 ---
 
-## Task P4.8: 删 LVGL + 设 SDL demo 为默认
+## Task 24: 删 LVGL + 设 SDL demo 为默认
 
 **Files:**
 - Modify: `main/CMakeLists.txt`（删 `lvgl` REQUIRES，SRCS 去 `main.c` 的 LVGL 代码——实际 main.c 已瘦化）
@@ -777,7 +777,7 @@ git commit -m "feat: remove LVGL, SDL3 full-hardware demo is now the firmware"
 
 # Phase P5 — 收尾
 
-## Task P5.1: sdkconfig.defaults 定稿 + CLAUDE.md 更新
+## Task 25: sdkconfig.defaults 定稿 + CLAUDE.md 更新
 
 **Files:**
 - Modify: `sdkconfig.defaults`
@@ -801,7 +801,7 @@ git commit -m "docs: finalize sdkconfig.defaults + update CLAUDE.md for SDL3/har
 
 ---
 
-## Task P5.2: 生成 merge-bin 固件
+## Task 26: 生成 merge-bin 固件
 
 - [ ] **Step 1: 全量 build + merge**
 
