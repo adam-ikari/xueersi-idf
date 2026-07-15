@@ -131,7 +131,8 @@
 #define THERM_HISTORY_MIN_PCT       35
 #define THERM_HISTORY_MAX_PCT       65
 
-/* Page enum */
+/* Page enum (only for LVGL build — SDL build gets it from sdl_demo.h) */
+#if !CONFIG_XIAOMIAO_USE_SDL
 typedef enum {
     UI_PAGE_LIGHT = 0,
     UI_PAGE_THERM,
@@ -169,9 +170,11 @@ typedef struct {
     lv_group_t *group;
     ui_page_t page_id;
 } ui_state_t;
+#endif /* !CONFIG_XIAOMIAO_USE_SDL */
 
 static const char *TAG = "xiaomiao_dash";
 
+#if !CONFIG_XIAOMIAO_USE_SDL
 static lv_draw_buf_t s_draw_buf3;
 static ui_state_t s_ui;
 
@@ -1297,6 +1300,7 @@ static void lvgl_task(void *arg)
         usleep(delay_ms * 1000);
     }
 }
+#endif /* !CONFIG_XIAOMIAO_USE_SDL */
 
 /* Entry point */
 void app_main(void)
