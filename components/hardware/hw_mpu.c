@@ -3,10 +3,13 @@
 #include "hw_i2c.h"
 #include "hw_board.h"
 
+#include "esp_log.h"
 #include "esp_timer.h"
 
 #include <math.h>
 #include <string.h>
+
+static const char *TAG = "hw_mpu";
 
 static uint32_t s_last_mpu_probe_ms;
 static bool s_mpu_probe_seen;
@@ -63,8 +66,11 @@ void hw_mpu_probe(bool force)
     board->mpu_whoami = who;
     if (who != MPU6050_WHO_AM_I_VALUE) {
         board->last_mpu_err = ESP_ERR_INVALID_ARG;
+        ESP_LOGI(TAG, "MPU6050 WHO_AM_I mismatch: got 0x%02X, expected 0x%02X", who, MPU6050_WHO_AM_I_VALUE);
         return;
     }
+
+    ESP_LOGI(TAG, "MPU6050 probe OK (whoami=0x%02X)", who);
 
     err = hw_i2c_write_reg(dev, MPU6050_REG_PWR_MGMT_1, 0x00);
     if (err != ESP_OK) {
@@ -75,6 +81,7 @@ void hw_mpu_probe(bool force)
     board->mpu_present = true;
     board->last_mpu_err = ESP_OK;
     copy_text(board->gesture, sizeof(board->gesture), "READY");
+    ESP_LOGI(TAG, "MPU6050 detected and initialized (whoami=0x%02X)", who);
 }
 
 void hw_mpu_read(void)
