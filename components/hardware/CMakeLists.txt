@@ -1,6 +1,7 @@
 idf_component_register(SRCS
                        hw_board.c
                        hw_display.c
+                       hw_fb.c
                        hw_input.c
                        hw_i2c.c
                        hw_gd32.c

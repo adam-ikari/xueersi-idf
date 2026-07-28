@@ -31,6 +31,12 @@
 #include "freertos/task.h"
 #include "lvgl.h"
 #include "sdkconfig.h"
+#include "wasm_export.h"
+#include "wasm_test.wasm.h"
+#include "hw_fb.h"
+#include "canvas_api.h"
+#include "input_api.h"
+#include "audio_api.h"
 
 /* Hardware component includes */
 #include "hw_board.h"
@@ -44,7 +50,7 @@
 #include "hw_extio.h"
 #include "hw_sd.h"
 
-#include "sdl_demo.h"
+#include "tinygl_test.h"
 
 #include <pthread.h>
 
@@ -1300,6 +1306,94 @@ static void lvgl_task(void *arg)
 }
 #endif /* !CONFIG_XIAOMIAO_USE_SDL */
 
+/* ---- WAMR Canvas 2D test task (runs in pthread; wasm_runtime_full_init
+ *      internally calls pthread_self, which needs pthread TLS). ---- */
+static void *wasm_test_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI("wasm", "wasm_test_task enter");
+
+    RuntimeInitArgs init_args;
+    memset(&init_args, 0, sizeof(init_args));
+    init_args.mem_alloc_type = Alloc_With_Pool;
+    init_args.mem_alloc_option.pool.heap_buf = malloc(256 * 1024);
+    init_args.mem_alloc_option.pool.heap_size = 256 * 1024;
+
+    if (!wasm_runtime_full_init(&init_args)) {
+        ESP_LOGE("wasm", "WAMR runtime init failed");
+        free(init_args.mem_alloc_option.pool.heap_buf);
+        return NULL;
+    }
+    ESP_LOGI("wasm", "WAMR runtime initialized");
+
+    hw_fb_init();
+    canvas_api_init(hw_fb_buffer(), 160, 128);
+    if (!canvas_api_register()) {
+        ESP_LOGE("wasm", "Canvas API registration failed");
+    } else {
+        ESP_LOGI("wasm", "Canvas 2D API registered");
+    }
+    hw_display_on();  /* Turn on ST7735 after first framebuffer is ready */
+    input_api_register();
+    audio_api_register();
+    ESP_LOGI("wasm", "host APIs registered, about to load .wasm");
+
+    /* Load WASM bytecode */
+    char error_buf[128];
+    wasm_module_t module = wasm_runtime_load(wasm_test_wasm, wasm_test_wasm_len,
+                                               error_buf, sizeof(error_buf));
+    if (!module) {
+        ESP_LOGE("wasm", "Load failed: %s", error_buf);
+        wasm_runtime_destroy();
+        return NULL;
+    }
+    ESP_LOGI("wasm", "WASM module loaded (%u bytes)", wasm_test_wasm_len);
+
+    /* Instantiate */
+    wasm_module_inst_t inst = wasm_runtime_instantiate(module, 8192, 0,
+                                                        error_buf, sizeof(error_buf));
+    if (!inst) {
+        ESP_LOGE("wasm", "Instantiate failed: %s", error_buf);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        return NULL;
+    }
+    ESP_LOGI("wasm", "Instance created");
+
+    wasm_function_inst_t func = wasm_runtime_lookup_function(inst, "draw");
+    if (!func) {
+        ESP_LOGE("wasm", "Function 'draw' not found");
+        wasm_runtime_deinstantiate(inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        return NULL;
+    }
+    ESP_LOGI("wasm", "draw() found, calling...");
+
+    wasm_exec_env_t exec_env = wasm_runtime_create_exec_env(inst, 8192);
+    if (!exec_env) {
+        ESP_LOGE("wasm", "Create exec env failed");
+        wasm_runtime_deinstantiate(inst);
+        wasm_runtime_unload(module);
+        wasm_runtime_destroy();
+        return NULL;
+    }
+
+    if (!wasm_runtime_call_wasm(exec_env, func, 0, NULL)) {
+        ESP_LOGE("wasm", "Call 'draw' failed: %s",
+                 wasm_runtime_get_exception(inst));
+    } else {
+        ESP_LOGI("wasm", "draw() returned successfully");
+    }
+
+    wasm_runtime_destroy_exec_env(exec_env);
+    wasm_runtime_deinstantiate(inst);
+    wasm_runtime_unload(module);
+    wasm_runtime_destroy();
+    ESP_LOGI("wasm", "wasm_test_task done");
+    return NULL;
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "Xiaomiao SDL3 demo boot");
@@ -1307,11 +1401,10 @@ void app_main(void)
     /* Hardware init (SPI2, I2C0, ADC, buzzer, ext-IO, display, buttons) */
     hw_board_init();
 
-    /* Start the SDL demo task. SDL_Init and all SDL calls happen inside
-     * the pthread task, because SDL_Init internally calls pthread_self()
-     * which requires the pthread TLS to be set up by pthread_create. */
-    pthread_t sdl_thread;
-    int pret = pthread_create(&sdl_thread, NULL, sdl_demo_task, NULL);
-    (void)pret;
-    pthread_detach(sdl_thread);
+    /* TinyGL benchmark — replace WAMR Canvas test for GPU performance check */
+    {
+        pthread_t tinygl_thread;
+        pthread_create(&tinygl_thread, NULL, tinygl_benchmark, NULL);
+        pthread_join(tinygl_thread, NULL);
+    }
 }
