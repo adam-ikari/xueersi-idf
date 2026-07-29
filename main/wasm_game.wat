@@ -10,9 +10,6 @@
 ;; Build: wat2wasm wasm_game.wat -o wasm_game.wasm
 
 (module
-  ;; ── Memory (needed for physics_body_pos ptr args) ──
-  (memory (export "memory") 1)
-
   ;; ── Imports from host ──────────────────────────────────
   (import "env" "render_submit_cube" (func $render_submit_cube
     (param f32 f32 f32 f32 f32 f32 i32)))
@@ -22,6 +19,9 @@
   (import "env" "physics_body_count" (func $physics_body_count (result i32)))
   (import "env" "physics_body_pos"   (func $physics_body_pos
     (param i32 i32 i32 i32)))
+
+  ;; ── Memory (needed for physics_body_pos ptr args) ──
+  (memory (export "memory") 1)
 
   ;; ── Global state ──────────────────────────────────────
   (global $angle     (mut f32) (f32.const 0.0))

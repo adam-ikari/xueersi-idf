@@ -51,9 +51,11 @@
 #include "hw_sd.h"
 
 #include "tinygl_test.h"
+#include "tinygl_pipeline.h"
 #include "render_api.h"
 #include "render_queue.h"
 #include "tinygl_physics.h"
+#include "display_backend.h"
 
 #include "debug_console.h"
 

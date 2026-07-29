@@ -503,7 +503,7 @@ static void tinygl_scene_task(void *arg)
 }
 
 /* ── Render task (core 1) ──────────────────────────────── */
-static void tinygl_render_task(void *arg)
+void tinygl_render_task(void *arg)
 {
     (void)arg;
 
