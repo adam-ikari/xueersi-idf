@@ -338,6 +338,11 @@ static void tinygl_render_task(void *arg)
         frame_start_us = esp_timer_get_time();
 
         if (!tinygl_render_paused) {
+            /* Update pbuf to current render buffer (dual-fb swap) */
+            GLContext *c = gl_get_context();
+            if (c && c->zb) {
+                c->zb->pbuf = (PIXEL *)s_display->get_buffer();
+            }
             render_frame(angle_y);
             frame_count++;
             angle_y += 2.0f;
