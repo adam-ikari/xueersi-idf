@@ -44,6 +44,7 @@ int bmp_save_rgb565(const uint16_t* fb, int w, int h, const char* path) {
 
     int row_size = ((w * 3 + 3) / 4) * 4;  /* padded to 4-byte boundary */
     int image_size = row_size * h;
+    uint8_t* row = NULL;
 
     bmp_file_header_t fh = {
         .type = 0x4D42,  /* 'BM' */
@@ -70,7 +71,7 @@ int bmp_save_rgb565(const uint16_t* fb, int w, int h, const char* path) {
     if (fwrite(&fh, sizeof(fh), 1, f) != 1) goto fail;
     if (fwrite(&ih, sizeof(ih), 1, f) != 1) goto fail;
 
-    uint8_t* row = (uint8_t*)malloc(row_size);
+    row = (uint8_t*)malloc(row_size);
     if (!row) { fclose(f); return -1; }
     memset(row, 0, row_size);
 
@@ -105,6 +106,7 @@ int bmp_save_rgb565_raw(const uint16_t* fb, int w, int h, const char* path) {
 
     int row_size = ((w * 2 + 3) / 4) * 4;
     int image_size = row_size * h;
+    uint8_t* row = NULL;
 
     bmp_file_header_t fh = {
         .type = 0x4D42,
@@ -134,7 +136,7 @@ int bmp_save_rgb565_raw(const uint16_t* fb, int w, int h, const char* path) {
     if (fwrite(&ih, sizeof(ih), 1, f) != 1) goto fail_raw;
     if (fwrite(masks, sizeof(masks), 1, f) != 1) goto fail_raw;
 
-    uint8_t* row = (uint8_t*)malloc(row_size);
+    row = (uint8_t*)malloc(row_size);
     if (!row) { fclose(f); return -1; }
     memset(row, 0, row_size);
 
