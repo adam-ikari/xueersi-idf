@@ -94,20 +94,25 @@ TEX_HEADERS = $(patsubst %, $(BUILD_DIR)/texture_%.h, $(TEXTURES))
 GEN_TEX = ../../tools/gen_texture.py
 
 # ── Objects ──────────────────────────────────────────────────────
-# Use $(BUILD_DIR)/flat/ prefix to avoid subdirectory collisions
-SRC       = $(TINYGL_SRC) $(SCENE_SRC) $(EMU_SRC) $(TEST_SRC)
-OBJ       = $(patsubst %.c, $(BUILD_DIR)/%.o, $(notdir $(SRC)))
+# Use $(BUILD_DIR)/flat/ prefix to avoid subdirectory collisions.
+# test_runner.c has its own main() — exclude it from the emulator binary.
+ALL_SRC   = $(TINYGL_SRC) $(SCENE_SRC) $(EMU_SRC) $(TEST_SRC)
+EMU_SRC_ONLY = $(TINYGL_SRC) $(SCENE_SRC) $(EMU_SRC) $(filter-out emu_tests/test_runner.c, $(TEST_SRC))
+TEST_RUNNER_SRC = $(TINYGL_SRC) $(SCENE_SRC) $(EMU_SRC) $(TEST_SRC)
+
+EMU_OBJ   = $(patsubst %.c, $(BUILD_DIR)/%.o, $(notdir $(EMU_SRC_ONLY)))
+TEST_OBJ  = $(patsubst %.c, $(BUILD_DIR)/%.o, $(notdir $(TEST_RUNNER_SRC)))
 
 # Resolve name conflicts: two directories may contain the same filename.
 # vpath tells make where to look for %.c when building from a flat obj name.
-vpath %.c $(sort $(dir $(SRC)))
+vpath %.c $(sort $(dir $(ALL_SRC)))
 
 .PHONY: all clean test benchmark test-rasterizer test-runner
 
 all: $(TEX_HEADERS) $(TARGET)
 
-$(TARGET): $(OBJ)
-	$(CC) $(OBJ) -o $@ $(LDFLAGS)
+$(TARGET): $(EMU_OBJ)
+	$(CC) $(EMU_OBJ) -o $@ $(LDFLAGS)
 
 # Flat object build rule — relies on vpath to find source
 $(BUILD_DIR)/%.o: %.c | $(BUILD_DIR)
@@ -132,7 +137,7 @@ test-rasterizer: $(TARGET)
 
 # ── Test runner (separate binary, excludes main_emu.o) ──────────
 TEST_RUNNER = test_runner
-TEST_RUNNER_OBJ = $(filter-out $(BUILD_DIR)/main_emu.o, $(OBJ))
+TEST_RUNNER_OBJ = $(filter-out $(BUILD_DIR)/main_emu.o, $(TEST_OBJ))
 
 $(TEST_RUNNER): $(TEST_RUNNER_OBJ)
 	$(CC) $^ -o $@ $(LDFLAGS)
