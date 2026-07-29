@@ -92,7 +92,7 @@ static void wasm_physics_body_pos(wasm_exec_env_t env,
 bool render_api_register(void)
 {
     REG_WASM("render_clear",          wasm_render_clear,          "(iii)");
-    REG_WASM("render_submit_cube",    wasm_render_submit_cube,    "(fffffffiii)");
+    REG_WASM("render_submit_cube",    wasm_render_submit_cube,    "(ffffffi)");
     REG_WASM("physics_step",          wasm_physics_step,          "(f)");
     REG_WASM("physics_spawn",         wasm_physics_spawn,         "(ffff)i");
     REG_WASM("physics_body_count",    wasm_physics_body_count,    "()i");

@@ -28,6 +28,12 @@
 #include "texture_brick.h"
 #include "texture_grid.h"
 #include "tinygl_physics.h"
+#include "render_queue.h"
+
+#ifdef TGL_WASM_GAME
+#include "wasm_export.h"
+#include "render_api.h"
+#endif
 
 #ifndef TGL_EMU_BUILD
 #include "esp_log.h"
@@ -41,6 +47,7 @@
 
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "tinygl";
 
@@ -606,9 +613,77 @@ void *tinygl_benchmark(void *arg)
         1                           /* core 1 */
     );
 
-    /* Core 0: idle — available for debug console, I2C, etc. */
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
+    /* Core 0: WAMR wasm game loop — calls game_update() at ~30 Hz.
+     * The wasm module submits draw commands via render_submit_cube() host
+     * function, which pushes to the render queue consumed by core 1. */
+    {
+#ifdef TGL_WASM_GAME
+        #include "wasm_game.wasm.h"
+
+        RuntimeInitArgs init_args;
+        memset(&init_args, 0, sizeof(init_args));
+        init_args.mem_alloc_type = Alloc_With_Pool;
+        init_args.mem_alloc_option.pool.heap_buf = malloc(128 * 1024);
+        init_args.mem_alloc_option.pool.heap_size = 128 * 1024;
+
+        if (!wasm_runtime_full_init(&init_args)) {
+            ESP_LOGE(TAG, "WAMR init failed");
+            free(init_args.mem_alloc_option.pool.heap_buf);
+        } else {
+            ESP_LOGI(TAG, "WAMR runtime initialized on core 0");
+
+            if (render_api_register()) {
+                char error_buf[128];
+                wasm_module_t module = wasm_runtime_load(wasm_game_wasm, wasm_game_wasm_len,
+                                                           error_buf, sizeof(error_buf));
+                if (module) {
+                    ESP_LOGI(TAG, "WASM game module loaded (%u bytes)", wasm_game_wasm_len);
+                    ESP_LOGI(TAG, "About to instantiate (stack=32768)...");
+                    wasm_module_inst_t inst = wasm_runtime_instantiate(module, 32768, 0,
+                                                                        error_buf, sizeof(error_buf));
+                    if (inst) {
+                        ESP_LOGI(TAG, "WASM instance created");
+
+                        /* Call game_init() once */
+                        wasm_function_inst_t fn_init = wasm_runtime_lookup_function(inst, "game_init");
+                        if (fn_init) {
+                            wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 8192);
+                            if (env) { wasm_runtime_call_wasm(env, fn_init, 0, NULL); wasm_runtime_destroy_exec_env(env); }
+                            ESP_LOGI(TAG, "game_init() done");
+                        }
+
+                        /* Game loop: call game_update() at ~30 Hz */
+                        wasm_function_inst_t fn_update = wasm_runtime_lookup_function(inst, "game_update");
+                        if (fn_update) {
+                            ESP_LOGI(TAG, "Entering WASM game loop on core 0");
+                            int64_t last_us = esp_timer_get_time();
+                            while (1) {
+                                wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 8192);
+                                if (env) { wasm_runtime_call_wasm(env, fn_update, 0, NULL); wasm_runtime_destroy_exec_env(env); }
+
+                                int64_t now_us = esp_timer_get_time();
+                                int64_t elapsed_us = now_us - last_us;
+                                last_us = now_us;
+                                if (elapsed_us < 33333)
+                                    vTaskDelay(pdMS_TO_TICKS((33333 - elapsed_us) / 1000));
+                                else
+                                    vTaskDelay(1);
+                            }
+                        }
+                    } else {
+                        ESP_LOGE(TAG, "WASM instantiate failed: %s", error_buf);
+                    }
+                } else {
+                    ESP_LOGE(TAG, "WASM load failed: %s", error_buf);
+                }
+            }
+        }
+#else
+        /* Fallback: idle loop when WASM game is not compiled in */
+        while (1) {
+            vTaskDelay(pdMS_TO_TICKS(1000));
+        }
+#endif
     }
 
     return NULL;

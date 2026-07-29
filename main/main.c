@@ -32,7 +32,8 @@
 #include "lvgl.h"
 #include "sdkconfig.h"
 #include "wasm_export.h"
-#include "wasm_test.wasm.h"
+#include "wasm_game.wasm.h"
+/* wasm bytecode embedded by CMake (wasm_game.wasm or wasm_test.wasm) */
 #include "hw_fb.h"
 #include "canvas_api.h"
 #include "input_api.h"
@@ -1347,14 +1348,14 @@ static void *wasm_test_task(void *arg)
 
     /* Load WASM bytecode */
     char error_buf[128];
-    wasm_module_t module = wasm_runtime_load(wasm_test_wasm, wasm_test_wasm_len,
-                                               error_buf, sizeof(error_buf));
+    wasm_module_t module = wasm_runtime_load(wasm_game_wasm, wasm_game_wasm_len,
+                                                   error_buf, sizeof(error_buf));
     if (!module) {
         ESP_LOGE("wasm", "Load failed: %s", error_buf);
         wasm_runtime_destroy();
         return NULL;
     }
-    ESP_LOGI("wasm", "WASM module loaded (%u bytes)", wasm_test_wasm_len);
+    ESP_LOGI("wasm", "WASM module loaded (%u bytes)", wasm_game_wasm_len);
 
     /* Instantiate */
     wasm_module_inst_t inst = wasm_runtime_instantiate(module, 8192, 0,
