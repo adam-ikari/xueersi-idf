@@ -7,6 +7,14 @@
 #define TEST_W 160
 #define TEST_H 128
 
+/* Color values in the format TinyGL's rasterizer expects (high-byte format).
+ * glColor4f(1.0,0.0,0.0) computes: ((1.0 * 0xFE0000) + 0x00FFFF) & 0xFFFFFF = 0xFEFFFF
+ * glColor4f(0.0,0.0,0.0) computes: ((0.0 * 0xFE0000) + 0x00FFFF) & 0xFFFFFF = 0x00FFFF
+ */
+#define GLCOLOR(v) ((((unsigned int)((v) * 0xFE0000)) + 0x00FFFF) & 0xFFFFFF)
+#define COLOR_FULL GLCOLOR(1.0f)
+#define COLOR_ZERO GLCOLOR(0.0f)
+
 static ZBuffer* create_test_zb(void) {
     void* fb = malloc(TEST_W * TEST_H * 2);
     if (!fb) return NULL;
@@ -20,16 +28,24 @@ static void destroy_test_zb(ZBuffer* zb) {
     }
 }
 
-static int compare_fb(uint16_t* a, uint16_t* b, int w, int h) {
-    int diff = 0;
-    for (int i = 0; i < w * h; i++) {
-        uint16_t da = a[i] ^ b[i];
-        int dr = (da >> 11) & 0x1F;
-        int dg = (da >> 5) & 0x3F;
-        int db = da & 0x1F;
-        if (dr > 1 || dg > 1 || db > 1) diff++;
-    }
-    return diff;
+/*
+ * Point-in-triangle test using barycentric cross products.
+ * Returns 1 if (x,y) is inside or on the edge of the triangle.
+ */
+static int point_in_triangle(int x, int y,
+                             int x0, int y0,
+                             int x1, int y1,
+                             int x2, int y2) {
+    long long ax = x0 - x, ay = y0 - y;
+    long long bx = x1 - x, by = y1 - y;
+    long long cx = x2 - x, cy = y2 - y;
+
+    long long cross1 = ax * by - ay * bx;
+    long long cross2 = bx * cy - by * cx;
+    long long cross3 = cx * ay - cy * ax;
+
+    return (cross1 >= 0 && cross2 >= 0 && cross3 >= 0) ||
+           (cross1 <= 0 && cross2 <= 0 && cross3 <= 0);
 }
 
 // 测试 1: Flat 三角形（纯色填充）
@@ -39,27 +55,50 @@ static test_result_t test_flat_triangle(void) {
     ZBuffer* zb = create_test_zb();
     if (!zb) { r.error_msg = "ZB_open failed"; return r; }
 
-    ZBufferPoint p0 = {10, 10, 0x4000, 0, 0, 255, 0, 0};
-    ZBufferPoint p1 = {50, 10, 0x4000, 0, 0, 255, 0, 0};
-    ZBufferPoint p2 = {30, 40, 0x4000, 0, 0, 255, 0, 0};
+    ZBufferPoint p0 = {10, 10, 0x4000, 0, 0, (GLint)COLOR_FULL, (GLint)COLOR_ZERO, (GLint)COLOR_ZERO, 0, 0};
+    ZBufferPoint p1 = {50, 10, 0x4000, 0, 0, (GLint)COLOR_FULL, (GLint)COLOR_ZERO, (GLint)COLOR_ZERO, 0, 0};
+    ZBufferPoint p2 = {30, 40, 0x4000, 0, 0, (GLint)COLOR_FULL, (GLint)COLOR_ZERO, (GLint)COLOR_ZERO, 0, 0};
 
     ZB_fillTriangleFlatNOBLEND(zb, &p0, &p1, &p2);
 
-    // 验证：三角形区域内应为红色
-    uint16_t expected = RGB_TO_PIXEL(255, 0, 0);
+    uint16_t expected = RGB_TO_PIXEL(COLOR_FULL, COLOR_ZERO, COLOR_ZERO);
     int errors = 0;
+    int inside_pixels = 0;
+    int correct_inside = 0;
+
     for (int y = 10; y < 40; y++) {
         for (int x = 10; x < 50; x++) {
-            // 简单包围盒检查（不精确，但足够验证）
             uint16_t pix = ((uint16_t*)zb->pbuf)[y * TEST_W + x];
-            if (pix != expected && pix != 0) {  // 0 是背景
-                errors++;
+            if (point_in_triangle(x, y, 10, 10, 50, 10, 30, 40)) {
+                inside_pixels++;
+                if (pix == expected) {
+                    correct_inside++;
+                } else {
+                    errors++;
+                }
+            } else {
+                /* Outside triangle: allow background */
+                if (pix != 0 && pix != expected) {
+                    errors++;
+                }
             }
         }
     }
 
+    /* Must have drawn at least some interior pixels correctly */
+    int pass = (inside_pixels > 0) &&
+               (correct_inside >= inside_pixels / 2) &&
+               (errors < 5);
+
     r.diff_pixels = errors;
-    r.passed = (errors < 5);  // 允许少量边缘误差
+    r.passed = pass;
+    if (!pass && !r.error_msg) {
+        if (inside_pixels == 0) {
+            r.error_msg = "no interior pixels found";
+        } else if (correct_inside < inside_pixels / 2) {
+            r.error_msg = "too few correct interior pixels";
+        }
+    }
 
     destroy_test_zb(zb);
     return r;
@@ -72,21 +111,30 @@ static test_result_t test_smooth_triangle(void) {
     ZBuffer* zb = create_test_zb();
     if (!zb) { r.error_msg = "ZB_open failed"; return r; }
 
-    ZBufferPoint p0 = {10, 10, 0x4000, 0, 0, 255, 0, 0};    // 红
-    ZBufferPoint p1 = {50, 10, 0x4000, 0, 0, 0, 255, 0};    // 绿
-    ZBufferPoint p2 = {30, 40, 0x4000, 0, 0, 0, 0, 255};   // 蓝
+    ZBufferPoint p0 = {10, 10, 0x4000, 0, 0, (GLint)COLOR_FULL, (GLint)COLOR_ZERO, (GLint)COLOR_ZERO, 0, 0};   // 红
+    ZBufferPoint p1 = {50, 10, 0x4000, 0, 0, (GLint)COLOR_ZERO, (GLint)COLOR_FULL, (GLint)COLOR_ZERO, 0, 0};   // 绿
+    ZBufferPoint p2 = {30, 40, 0x4000, 0, 0, (GLint)COLOR_ZERO, (GLint)COLOR_ZERO, (GLint)COLOR_FULL, 0, 0}; // 蓝
 
     ZB_fillTriangleSmoothNOBLEND(zb, &p0, &p1, &p2);
 
-    // 验证：三个顶点颜色正确
+    uint16_t red   = RGB_TO_PIXEL(COLOR_FULL, COLOR_ZERO, COLOR_ZERO);
+    uint16_t green = RGB_TO_PIXEL(COLOR_ZERO, COLOR_FULL, COLOR_ZERO);
+    uint16_t blue  = RGB_TO_PIXEL(COLOR_ZERO, COLOR_ZERO, COLOR_FULL);
+
+    /* 验证：三个顶点颜色正确 */
     uint16_t c0 = ((uint16_t*)zb->pbuf)[10 * TEST_W + 10];
     uint16_t c1 = ((uint16_t*)zb->pbuf)[10 * TEST_W + 50];
     uint16_t c2 = ((uint16_t*)zb->pbuf)[40 * TEST_W + 30];
 
     int errors = 0;
-    if (c0 != RGB_TO_PIXEL(255, 0, 0)) errors++;
-    if (c1 != RGB_TO_PIXEL(0, 255, 0)) errors++;
-    if (c2 != RGB_TO_PIXEL(0, 0, 255)) errors++;
+    if (c0 != red) errors++;
+    if (c1 != green) errors++;
+    if (c2 != blue) errors++;
+
+    /* 验证内部像素有插值颜色（不是纯顶点色） */
+    uint16_t centroid = ((uint16_t*)zb->pbuf)[20 * TEST_W + 30];
+    int centroid_ok = (centroid != red) && (centroid != green) && (centroid != blue) && (centroid != 0);
+    if (!centroid_ok) errors++;
 
     r.diff_pixels = errors;
     r.passed = (errors == 0);
@@ -102,35 +150,59 @@ static test_result_t test_textured_triangle(void) {
     ZBuffer* zb = create_test_zb();
     if (!zb) { r.error_msg = "ZB_open failed"; return r; }
 
-    // 创建 4x4 测试纹理（红色）
+    /* 创建 4x4 测试纹理（红色） */
     uint16_t tex[16];
-    for (int i = 0; i < 16; i++) tex[i] = RGB_TO_PIXEL(255, 0, 0);
+    uint16_t red_texel = RGB_TO_PIXEL(COLOR_FULL, COLOR_ZERO, COLOR_ZERO);
+    for (int i = 0; i < 16; i++) tex[i] = red_texel;
     ZB_setTexture(zb, tex);
 
-    ZBufferPoint p0 = {10, 10, 0x4000, 0, 0, 255, 255, 255};
-    ZBufferPoint p1 = {50, 10, 0x4000, 0, 0, 255, 255, 255};
-    ZBufferPoint p2 = {30, 40, 0x4000, 0, 0, 255, 255, 255};
-    // 纹理坐标
+    ZBufferPoint p0 = {10, 10, 0x4000, 0, 0, (GLint)COLOR_FULL, (GLint)COLOR_FULL, (GLint)COLOR_FULL, 0, 0};
+    ZBufferPoint p1 = {50, 10, 0x4000, 0, 0, (GLint)COLOR_FULL, (GLint)COLOR_FULL, (GLint)COLOR_FULL, 0, 0};
+    ZBufferPoint p2 = {30, 40, 0x4000, 0, 0, (GLint)COLOR_FULL, (GLint)COLOR_FULL, (GLint)COLOR_FULL, 0, 0};
+    /* 纹理坐标 */
     p0.s = 0; p0.t = 0;
     p1.s = 1 << ZB_POINT_S_FRAC_BITS; p1.t = 0;
     p2.s = 0; p2.t = 1 << ZB_POINT_T_FRAC_BITS;
 
     ZB_fillTriangleMappingPerspectiveNOBLEND(zb, &p0, &p1, &p2);
 
-    // 验证：三角形区域内应为红色
-    uint16_t expected = RGB_TO_PIXEL(255, 0, 0);
+    uint16_t expected = red_texel;
     int errors = 0;
+    int inside_pixels = 0;
+    int textured_inside = 0;
+
     for (int y = 12; y < 38; y++) {
         for (int x = 15; x < 45; x++) {
             uint16_t pix = ((uint16_t*)zb->pbuf)[y * TEST_W + x];
-            if (pix != expected && pix != 0) {
-                errors++;
+            if (point_in_triangle(x, y, 10, 10, 50, 10, 30, 40)) {
+                inside_pixels++;
+                if (pix == expected) {
+                    textured_inside++;
+                } else if (pix != 0) {
+                    errors++;
+                }
+            } else {
+                if (pix != 0 && pix != expected) {
+                    errors++;
+                }
             }
         }
     }
 
+    /* Must have drawn at least some interior pixels with texture */
+    int pass = (inside_pixels > 0) &&
+               (textured_inside >= inside_pixels / 2) &&
+               (errors < 10);
+
     r.diff_pixels = errors;
-    r.passed = (errors < 10);
+    r.passed = pass;
+    if (!pass && !r.error_msg) {
+        if (inside_pixels == 0) {
+            r.error_msg = "no interior pixels found";
+        } else if (textured_inside < inside_pixels / 2) {
+            r.error_msg = "too few textured interior pixels";
+        }
+    }
 
     destroy_test_zb(zb);
     return r;
@@ -138,10 +210,23 @@ static test_result_t test_textured_triangle(void) {
 
 int test_rasterizer_run(test_result_t* results, int max_results) {
     int count = 0;
+    int passed = 0;
 
-    if (count < max_results) results[count++] = test_flat_triangle();
-    if (count < max_results) results[count++] = test_smooth_triangle();
-    if (count < max_results) results[count++] = test_textured_triangle();
+    if (count < max_results) {
+        results[count] = test_flat_triangle();
+        if (results[count].passed) passed++;
+        count++;
+    }
+    if (count < max_results) {
+        results[count] = test_smooth_triangle();
+        if (results[count].passed) passed++;
+        count++;
+    }
+    if (count < max_results) {
+        results[count] = test_textured_triangle();
+        if (results[count].passed) passed++;
+        count++;
+    }
 
-    return count;
+    return passed;
 }
