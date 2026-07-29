@@ -89,10 +89,6 @@ TinyGL (C-Chads) vendor 至 `components/tinygl/`。完成多纹理、光照、�
 ### P3: 实时阴影
 - shadow mapping 或 stencil shadow volumes（TinyGL 无 stencil buffer，需 shadow map）。
 
-### P4: 游戏引擎集成
-- 场景图 + 相机系统 + 动画循环
-- WAMR Host API：TinyGL + Canvas 2D 混合渲染
-
 ## 维护备忘
 - `components/tinygl/` 是 vendor（非 submodule）。本地补丁：
   `TGL_PIXEL_BYTE_SWAP`/`TGL_TEXTURE_BYTE_SWAP`、`TGL_FEATURE_LIT_TEXTURES=1`、
