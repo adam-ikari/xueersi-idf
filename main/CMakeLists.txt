@@ -4,6 +4,7 @@ idf_component_register(SRCS "main.c"
                                      "audio_api.c"
                                      "tinygl_test.c"
                                      "tinygl_physics.c"
+                                     "render_queue.c"
                                      "display_st7735.c"
                        PRIV_REQUIRES esp_lcd
                                      esp_timer

@@ -402,11 +402,23 @@ int gl_init(int w, int h)
 }
 
 /* ── Render a single frame ───────────────────────────── */
+#include "render_queue.h"
+
+/* Callback invoked by render_queue_drain for each command from core 0. */
+static void render_cmd_draw(const render_cmd_t *cmd)
+{
+    draw_textured_cube(cmd->x, cmd->y, cmd->z, cmd->size,
+                       cmd->rx, cmd->ry, cmd->tex_id);
+}
+
+/* ── Render one frame (core 1) ───────────────────────────
+ * Skybox is fixed; scene geometry comes from the render queue
+ * (populated by core 0 physics/game logic task). */
 void render_frame(float angle_y)
 {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    /* ── Skybox ── centered on camera (rotation only, no translation). */
+    /* ── Skybox ── centred on camera (rotation only, no translation). */
     glLoadIdentity();
     glRotatef(25, 1, 0, 0);
     glRotatef(angle_y, 0, 1, 0);
@@ -418,41 +430,79 @@ void render_frame(float angle_y)
     glRotatef(25, 1, 0, 0);
     glRotatef(angle_y, 0, 1, 0);
 
-    int n = tinygl_cube_count;
-    if (n < 1) n = 1;
-    static const GLuint cube_tex[4] = { TEX_CERAMIC, TEX_CHECKER, TEX_BRICK, TEX_GRID };
-
-    if (tinygl_physics_mode) {
-        physics_step(1.0f / 60.0f);
-        int drawn = 0;
-        for (int i = 0; i < MAX_BODIES && drawn < n; i++) {
-            body_t *b = physics_get(i);
-            if (!b || !b->active) continue;
-            draw_textured_cube(b->x, b->y, b->z, b->hs * 2.0f,
-                               0.0f, 0.0f, cube_tex[drawn % 4]);
-            drawn++;
-        }
-    } else {
-        int per_row = 1;
-        while (per_row * per_row < n) per_row++;
-        for (int i = 0; i < n; i++) {
-            int row = i / per_row;
-            int col = i % per_row;
-            float spacing = 2.5f;
-            float ox = (col - (per_row - 1) * 0.5f) * spacing;
-            float oy = (row - (per_row - 1) * 0.5f) * spacing;
-            draw_textured_cube(ox, oy, 0.0f, 1.6f,
-                               angle_y * (0.5f + i * 0.07f),
-                               angle_y * (0.7f + i * 0.11f),
-                               cube_tex[i % 4]);
-        }
-    }
+    /* Drain the render queue — all draw calls are issued by core 0. */
+    render_queue_drain(render_cmd_draw);
 
     gl_flush_to_display();
 }
 
-/* ── Render task (pinned to core 1) ──────────────────── */
-#ifndef TGL_EMU_BUILD
+/* ── Physics + scene update task (core 0) ───────────────
+ * Runs physics simulation AND generates render commands for
+ * core 1 to consume. This is where all model-world-coordinate
+ * computation happens — core 1 only executes GL calls. */
+static void tinygl_scene_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "Scene task started on core %d", xPortGetCoreID());
+
+    static const GLuint cube_tex[4] = { TEX_CERAMIC, TEX_CHECKER, TEX_BRICK, TEX_GRID };
+    float angle_y = 0.0f;
+    int64_t last_phys_us = esp_timer_get_time();
+
+    while (1) {
+        int64_t now_us = esp_timer_get_time();
+        float phys_dt = (float)(now_us - last_phys_us) / 1000000.0f;
+        last_phys_us = now_us;
+        if (phys_dt > 0.1f) phys_dt = 0.1f;
+
+        /* ── Physics step (when enabled) ── */
+        if (tinygl_physics_mode) {
+            physics_step(phys_dt);
+        }
+
+        /* ── Generate render commands ── */
+        angle_y += 2.0f;
+        int n = tinygl_cube_count;
+        if (n < 1) n = 1;
+
+        if (tinygl_physics_mode) {
+            int pushed = 0;
+            for (int i = 0; i < MAX_BODIES && pushed < n; i++) {
+                body_t *b = physics_get(i);
+                if (!b || !b->active) continue;
+                render_queue_push((render_cmd_t){
+                    .x = b->x, .y = b->y, .z = b->z,
+                    .size = b->hs * 2.0f,
+                    .rx = 0.0f, .ry = 0.0f,
+                    .tex_id = cube_tex[pushed % 4],
+                });
+                pushed++;
+            }
+        } else {
+            int per_row = 1;
+            while (per_row * per_row < n) per_row++;
+            for (int i = 0; i < n; i++) {
+                int row = i / per_row;
+                int col = i % per_row;
+                float spacing = 2.5f;
+                float ox = (col - (per_row - 1) * 0.5f) * spacing;
+                float oy = (row - (per_row - 1) * 0.5f) * spacing;
+                render_queue_push((render_cmd_t){
+                    .x = ox, .y = oy, .z = 0.0f,
+                    .size = 1.6f,
+                    .rx = angle_y * (0.5f + i * 0.07f),
+                    .ry = angle_y * (0.7f + i * 0.11f),
+                    .tex_id = cube_tex[i % 4],
+                });
+            }
+        }
+
+        /* Target ~30 Hz scene update (matching render rate) */
+        vTaskDelay(pdMS_TO_TICKS(33));
+    }
+}
+
+/* ── Render task (core 1) ──────────────────────────────── */
 static void tinygl_render_task(void *arg)
 {
     (void)arg;
@@ -513,7 +563,11 @@ static void tinygl_render_task(void *arg)
 }
 #endif
 
-/* ── Benchmark task ──────────────────────────────────── */
+/* ── Platform entry point ───────────────────────────────
+ * Core 0: physics simulation + debug console (idle loop)
+ * Core 1: TinyGL rendering (30 FPS lock, DMA sync)
+ *
+ * Both cores share s_bodies[] via 32-bit float atomicity. */
 #ifndef TGL_EMU_BUILD
 void *tinygl_benchmark(void *arg)
 {
@@ -529,20 +583,31 @@ void *tinygl_benchmark(void *arg)
     }
 
     physics_init();
-    ESP_LOGI(TAG, "TinyGL benchmark starting on core 1");
+    ESP_LOGI(TAG, "Starting dual-core: scene on core 0, render on core 1");
 
-    /* Create render task pinned to core 1 */
+    /* Create scene task on core 0 (physics + model placement) */
+    xTaskCreatePinnedToCore(
+        tinygl_scene_task,
+        "scene",
+        4096,
+        NULL,
+        configMAX_PRIORITIES - 2,   /* slightly lower than render */
+        NULL,
+        0                           /* core 0 */
+    );
+
+    /* Create render task on core 1 (30 FPS) */
     xTaskCreatePinnedToCore(
         tinygl_render_task,
         "tinygl_render",
-        8192,   /* stack size (words) -- larger for FPU context */
+        8192,
         NULL,
-        configMAX_PRIORITIES - 1,
+        configMAX_PRIORITIES - 1,   /* highest: render gets priority */
         NULL,
-        1       /* core 1 */
+        1                           /* core 1 */
     );
 
-    /* Core 0: idle -- available for debug console, I2C, etc. */
+    /* Core 0: idle — available for debug console, I2C, etc. */
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
