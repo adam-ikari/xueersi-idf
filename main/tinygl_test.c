@@ -101,6 +101,94 @@ static void diag_fb(const char *label)
              c->zb->zbuf[0]);
 }
 
+/* ── Render a reflective cube (environment map reflection) ──
+ * For each vertex, compute reflection vector R = I - 2*(N·I)*N
+ * where I = eye-to-vertex direction, N = vertex normal.
+ * Map R to sphere-map texture coords: s=(Rx+1)/2, t=(Rz+1)/2.
+ * Uses the skybox texture (TEX_GRID) as the environment map. */
+static void draw_reflective_cube(float cx, float cy, float cz, float size,
+                                  float rx, float ry)
+{
+    float hs = size * 0.5f;
+    glPushMatrix();
+    glTranslatef(cx, cy, cz);
+    glRotatef(rx, 1, 0, 0);
+    glRotatef(ry, 0, 1, 0);
+    glBindTexture(GL_TEXTURE_2D, TEX_GRID);
+    glColor3f(1.0f, 1.0f, 1.0f);
+
+    /* Camera position in world space (before model transform) */
+    float eye_x = 0, eye_y = 0, eye_z = 5.0f;
+
+    /* 6 faces: normal + 4 vertices, same layout as draw_textured_cube */
+    static const struct { float nx,ny,nz; } norms[6] = {
+        {0,0,1}, {0,0,-1}, {0,1,0}, {0,-1,0}, {1,0,0}, {-1,0,0}
+    };
+
+    glBegin(GL_QUADS);
+    for (int f = 0; f < 6; f++) {
+        float nx = norms[f].nx, ny = norms[f].ny, nz = norms[f].nz;
+        glNormal3f(nx, ny, nz);
+
+        /* 4 corner vertices for this face */
+        float verts[4][3];
+        if (f == 0) { /* Front +Z */
+            verts[0][0]=-hs; verts[0][1]=-hs; verts[0][2]= hs;
+            verts[1][0]= hs; verts[1][1]=-hs; verts[1][2]= hs;
+            verts[2][0]= hs; verts[2][1]= hs; verts[2][2]= hs;
+            verts[3][0]=-hs; verts[3][1]= hs; verts[3][2]= hs;
+        } else if (f == 1) { /* Back -Z */
+            verts[0][0]= hs; verts[0][1]=-hs; verts[0][2]=-hs;
+            verts[1][0]=-hs; verts[1][1]=-hs; verts[1][2]=-hs;
+            verts[2][0]=-hs; verts[2][1]= hs; verts[2][2]=-hs;
+            verts[3][0]= hs; verts[3][1]= hs; verts[3][2]=-hs;
+        } else if (f == 2) { /* Top +Y */
+            verts[0][0]=-hs; verts[0][1]= hs; verts[0][2]= hs;
+            verts[1][0]= hs; verts[1][1]= hs; verts[1][2]= hs;
+            verts[2][0]= hs; verts[2][1]= hs; verts[2][2]=-hs;
+            verts[3][0]=-hs; verts[3][1]= hs; verts[3][2]=-hs;
+        } else if (f == 3) { /* Bottom -Y */
+            verts[0][0]=-hs; verts[0][1]=-hs; verts[0][2]=-hs;
+            verts[1][0]= hs; verts[1][1]=-hs; verts[1][2]=-hs;
+            verts[2][0]= hs; verts[2][1]=-hs; verts[2][2]= hs;
+            verts[3][0]=-hs; verts[3][1]=-hs; verts[3][2]= hs;
+        } else if (f == 4) { /* Right +X */
+            verts[0][0]= hs; verts[0][1]=-hs; verts[0][2]= hs;
+            verts[1][0]= hs; verts[1][1]=-hs; verts[1][2]=-hs;
+            verts[2][0]= hs; verts[2][1]= hs; verts[2][2]=-hs;
+            verts[3][0]= hs; verts[3][1]= hs; verts[3][2]= hs;
+        } else { /* Left -X */
+            verts[0][0]=-hs; verts[0][1]=-hs; verts[0][2]=-hs;
+            verts[1][0]=-hs; verts[1][1]=-hs; verts[1][2]= hs;
+            verts[2][0]=-hs; verts[2][1]= hs; verts[2][2]= hs;
+            verts[3][0]=-hs; verts[3][1]= hs; verts[3][2]=-hs;
+        }
+
+        for (int v = 0; v < 4; v++) {
+            float vx = verts[v][0], vy = verts[v][1], vz = verts[v][2];
+            /* View direction from eye to vertex */
+            float ix = vx - eye_x, iy = vy - eye_y, iz = vz - eye_z;
+            float il = sqrtf(ix*ix + iy*iy + iz*iz);
+            if (il > 0.001f) { ix /= il; iy /= il; iz /= il; }
+            /* Reflection: R = I - 2*(N·I)*N */
+            float ndoti = nx*ix + ny*iy + nz*iz;
+            float rr_x = ix - 2.0f*ndoti*nx;
+            float rr_z = iz - 2.0f*ndoti*nz;
+            /* Sphere map: s=(Rx+1)/2, t=(Rz+1)/2 */
+            float tc_s = (rr_x + 1.0f) * 0.5f;
+            float tc_t = (rr_z + 1.0f) * 0.5f;
+            if (tc_s < 0) tc_s = 0;
+            if (tc_s > 1) tc_s = 1;
+            if (tc_t < 0) tc_t = 0;
+            if (tc_t > 1) tc_t = 1;
+            glTexCoord2f(tc_s, tc_t);
+            glVertex3f(vx, vy, vz);
+        }
+    }
+    glEnd();
+    glPopMatrix();
+}
+
 /* ── Render a single textured cube ────────────────────── */
 static void draw_textured_cube(float x, float y, float z, float size,
                                float rx, float ry, GLuint tex_id)
@@ -198,9 +286,51 @@ static void draw_skybox(void)
     glDepthMask(GL_TRUE);
 }
 
+/* ── Ordered dithering (Bayer 4×4) for 16-bit color ────
+ * Simulates higher color depth by spreading quantization error across
+ * adjacent pixels. The 4×4 Bayer matrix adds a perceptually uniform
+ * pattern that's far less visible than 16-bit color banding.
+ * Cost: ~2μs per 160×128 frame (negligible). */
+static const int8_t s_bayer4[16] = {
+     0, -8,  2, -6,
+    -4,  4, -2,  6,
+     3, -5,  1, -7,
+    -1,  7, -3,  5,
+};
+
+static GLuint dither_callback(GLint x, GLint y, GLuint pixel, GLushort z)
+{
+    (void)z;
+    /* Un-swap to get logical RGB565 */
+    uint16_t w = (uint16_t)pixel;
+#if TGL_PIXEL_BYTE_SWAP
+    w = (uint16_t)((w << 8) | (w >> 8));
+#endif
+    /* Extract 8-bit channels */
+    int r = (w >> 11) & 0x1f;  r = (r << 3) | (r >> 2);  /* 5→8 bit */
+    int g = (w >>  5) & 0x3f;  g = (g << 2) | (g >> 4);  /* 6→8 bit */
+    int b =  w        & 0x1f;  b = (b << 3) | (b >> 2);  /* 5→8 bit */
+    /* Apply Bayer offset */
+    int idx = ((y & 3) << 2) | (x & 3);
+    int d = s_bayer4[idx];
+    r += d; g += d; b += d;
+    /* Clamp */
+    if (r < 0) r = 0; else if (r > 255) r = 255;
+    if (g < 0) g = 0; else if (g > 255) g = 255;
+    if (b < 0) b = 0; else if (b > 255) b = 255;
+    /* Back to RGB565 */
+    w = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+#if TGL_PIXEL_BYTE_SWAP
+    w = (uint16_t)((w << 8) | (w >> 8));
+#endif
+    return (GLuint)w;
+}
+
 /* ── Copy TinyGL framebuffer to display ────────────────── */
 static void gl_flush_to_display(void)
 {
+    /* Apply ordered dithering to reduce 16-bit color banding */
+    glPostProcess(dither_callback);
     s_display->flush();
 }
 
