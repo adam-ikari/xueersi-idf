@@ -314,7 +314,10 @@ typedef struct GLContext {
 	GLint specbuf_used_counter;
 	GLint specbuf_num_buffers;
 #endif
-	GLint zEnableSpecular; 
+	GLint zEnableSpecular;
+
+	/* affine texture mapping override (0=perspective, 1=affine) */
+	GLint use_affine_texture;
 
 	/* raster position */
 	GLint rasterpos_zz;

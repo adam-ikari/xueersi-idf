@@ -487,4 +487,112 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 #include "ztriangle.h"
 }
 
-#endif 
+/* Affine texture mapping with blend (delegates to NOBLEND since blend is
+ * typically disabled for skybox use case) */
+void ZB_fillTriangleMappingAffine(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
+	ZB_fillTriangleMappingAffineNOBLEND(zb, p0, p1, p2);
+}
+
+void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
+	PIXEL* texture;
+
+	GLubyte zbdw = zb->depth_write;
+	GLubyte zbdt = zb->depth_test;
+	TGL_STIPPLEVARS
+#undef INTERP_Z
+#undef INTERP_RGB
+#undef INTERP_ST
+#undef INTERP_STZ
+#define INTERP_Z
+#define INTERP_ST
+#define INTERP_RGB
+
+#define DRAW_INIT()                                                                                                                                            \
+	{                                                                                                                                                          \
+		texture = zb->current_texture;                                                                                                                         \
+	}
+#if TGL_FEATURE_LIT_TEXTURES == 1
+#define OR1OG1OB1DECL                                                                                                                                          \
+	register GLint or1, og1, ob1;                                                                                                                              \
+	or1 = r1;                                                                                                                                                  \
+	og1 = g1;                                                                                                                                                  \
+	ob1 = b1;
+#define OR1G1B1INCR                                                                                                                                            \
+	og1 += dgdx;                                                                                                                                               \
+	or1 += drdx;                                                                                                                                               \
+	ob1 += dbdx;
+#else
+#define OR1OG1OB1DECL /*A comment*/
+#define OR1G1B1INCR   /*Another comment*/
+#define or1 COLOR_MULT_MASK
+#define og1 COLOR_MULT_MASK
+#define ob1 COLOR_MULT_MASK
+#endif
+#if TGL_FEATURE_NO_DRAW_COLOR != 1
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
+				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t));                                                                           \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#else
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
+			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
+				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#endif
+#define DRAW_LINE()                                                                                                                                            \
+	{                                                                                                                                                          \
+		register GLushort* pz;                                                                                                                                 \
+		register PIXEL* pp;                                                                                                                                    \
+		register GLuint s, t, z;                                                                                                                               \
+		register GLint n;                                                                                                                                      \
+		OR1OG1OB1DECL                                                                                                                                          \
+		n = (x2 >> 16) - x1;                                                                                                                                   \
+		pp = (PIXEL*)((GLbyte*)pp1 + x1 * PSZB);                                                                                                               \
+		pz = pz1 + x1;                                                                                                                                         \
+		z = z1;                                                                                                                                                \
+		s = s1;                                                                                                                                                  \
+		t = t1;                                                                                                                                                  \
+		while (n >= 3) {                                                                                                                                       \
+			PUT_PIXEL(0);                                                                                                                                        \
+			PUT_PIXEL(1);                                                                                                                                        \
+			PUT_PIXEL(2);                                                                                                                                        \
+			PUT_PIXEL(3);                                                                                                                                        \
+			pz += 4;                                                                                                                                             \
+			pp += 4;                                                                                                                                             \
+			n -= 4;                                                                                                                                              \
+		}                                                                                                                                                      \
+		while (n >= 0) {                                                                                                                                       \
+			PUT_PIXEL(0);                                                                                                                                        \
+			pz++;                                                                                                                                                \
+			pp++;                                                                                                                                                \
+			n--;                                                                                                                                                 \
+		}                                                                                                                                                      \
+	}
+
+#include "ztriangle.h"
+}
+
+#endif

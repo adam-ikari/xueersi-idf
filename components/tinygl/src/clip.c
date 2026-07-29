@@ -414,12 +414,22 @@ void gl_draw_triangle_fill(GLVertex* p0, GLVertex* p1, GLVertex* p2) {
 
 		ZB_setTexture(c->zb, c->current_texture->images[0].pixmap);
 #if TGL_FEATURE_BLEND == 1
-		if (c->zb->enable_blend)
-			ZB_fillTriangleMappingPerspective(c->zb, &p0->zp, &p1->zp, &p2->zp);
+		if (c->zb->enable_blend) {
+			if (c->use_affine_texture)
+				ZB_fillTriangleMappingAffine(c->zb, &p0->zp, &p1->zp, &p2->zp);
+			else
+				ZB_fillTriangleMappingPerspective(c->zb, &p0->zp, &p1->zp, &p2->zp);
+		} else {
+			if (c->use_affine_texture)
+				ZB_fillTriangleMappingAffineNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
+			else
+				ZB_fillTriangleMappingPerspectiveNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
+		}
+#else
+		if (c->use_affine_texture)
+			ZB_fillTriangleMappingAffineNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
 		else
 			ZB_fillTriangleMappingPerspectiveNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
-#else
-		ZB_fillTriangleMappingPerspectiveNOBLEND(c->zb, &p0->zp, &p1->zp, &p2->zp);
 #endif
 	} else if (c->current_shade_model == GL_SMOOTH) {
 #if TGL_FEATURE_BLEND == 1
