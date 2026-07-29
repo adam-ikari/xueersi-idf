@@ -4,6 +4,7 @@
 
 TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成多纹理、光照、
 物理、天空盒四大功能，并建成串口调试基础设施（REPL + MCP + Skill）。
+**今日新增：PC 模拟器、离线 BMP 渲染、天空盒纹理细分、仿射纹理映射 API、双 framebuffer 异步 DMA、核心绑定。**
 
 ## 已完成 ✅
 
@@ -33,8 +34,8 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 
 - 6 面纹理立方体，`glDepthMask(GL_FALSE)` 不写深度，先于场景绘制。
 - 只跟随摄像机旋转（`glLoadIdentity` + rotate，无 translate）实现无限远效果。
-- `glDisable(GL_CULL_FACE)` 渲染所有内表面。
-- 验证：100% 纹理覆盖，0% 黑色/裁切，无 clear 色残留。
+- **2026-07-29 更新**：天空盒纹理扭曲已修复，每个面细分为 4×4 子四边形（共 96 面），
+  透视校正在小面上工作正常，纹理图案清晰可辨。
 
 ### 调试基础设施
 
@@ -42,8 +43,41 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
   命令：`state`/`fb`/`fbdump`/`tex`/`texdump`/`clear`/`rect`/`pause`/`resume`/`shot`/
   `fps`/`log on|off`/`cubes <n>`/`physics on|off|drop`。
 - `tools/mcp-server/server.py`：MCP Server 封装串口命令为 MCP 工具。
-- `.claude/skills/xiaomiao-debug.md`：TinyGL 调试 Skill。
 - `tools/decode_shot.py`：截图解码为 PNG 的 PC 端脚本。
+
+### P5: PC 模拟器（`tools/tinygl_emu/`）
+
+- 编译 `components/tinygl/src/` 源码到 PC，`#ifdef TGL_EMU_BUILD` 隔离 ESP32 代码。
+- SDL2 显示（4x 缩放窗口）+ headless 离线渲染（无 SDL2 窗口）。
+- BMP 编码器：24-bit RGB + 16-bit RGB565 raw（BI_BITFIELDS）。
+- `--render-bmp <out_dir> [frames] [cube_count]` 命令行模式。
+- 串口工具：`emu_serial/real_console.py`（可配置 `--port`）。
+- L1 rasterizer 单元测试（flat/smooth/textured，3/3 pass）。
+- L2 帧级测试（参考图像对比，1/1 pass）。
+- `make render-bmp` / `make render-scenes` / `make test-runner`。
+
+### P6: 仿射纹理映射 API
+
+- `components/tinygl/src/ztriangle.c`：新增 `ZB_fillTriangleMappingAffine` 和
+  `ZB_fillTriangleMappingAffineNOBLEND`（使用 `INTERP_ST` 而非 `INTERP_STZ`）。
+- `GLContext.use_affine_texture` 标志：0=透视校正，1=仿射（s/t 线性插值无 1/z 除法）。
+- `clip.c` 在 `gl_draw_triangle_fill` 中根据标志选择路径。
+- 用途：由游戏引擎层决定哪个物体用仿射（如天空盒大面），哪个用透视（如场景几何）。
+
+### P7: 双 Framebuffer + 异步 DMA
+
+- `main/display_st7735.c`：分配 2 个 DMA-capable framebuffer（各 40KB）。
+- `st7735_flush()`：等待前一次 DMA 完成 → 启动新 DMA → 交换 buffer 指针 → 立即返回。
+- DMA 完成 ISR 通过 `esp_lcd_panel_io_register_event_callbacks` 注册到 SPI 驱动。
+- PC 模拟器路径：同步 swap（无 DMA）。
+
+### P8: 渲染任务核心绑定
+
+- `main/tinygl_test.c`：提取渲染循环为 `tinygl_render_task()`。
+- `xTaskCreatePinnedToCore(..., 1)` 固定到核心 1（`configMAX_PRIORITIES - 1` 优先级）。
+- 核心 0 空闲，可用于 debug console、I2C、物理等。
+- FPS 日志打印当前核心 ID（`xPortGetCoreID()`）便于验证。
+- PC 模拟器路径保持单线程（`#ifndef TGL_EMU_BUILD`）。
 
 ## 关键 bug 修复记录
 
@@ -71,7 +105,26 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 
 - `clear.c` 中 `z=0` 配合 `ZCMPSIMP(z >= zpix)` 深度比较，z-buffer 清 0 后几何体通过。
 
+### 5. 天空盒纹理严重扭曲
+
+- **根因**：天空盒每个面是 s=15 的大四边形（GL_QUADS），透视校正 `1/z` 在屏幕
+  角落变化剧烈，纹理坐标非线性拉伸。
+- **修复**：每个面细分为 4×4 子四边形（`draw_skybox_face` 函数），小面上透视
+  校正工作正常。同时添加仿射纹理映射 API 作为备选方案。
+- **验证**：PC 模拟器渲染对比，棋盘格/砖墙/网格纹理清晰可辨。✅
+- **参考**：`/tmp/tinygl_compare/frame_subdiv.bmp`
+
+### 6. DMA 完成 ISR 未注册（已修复）
+
+- **根因**：`hw_display_set_flush_ready_cb` 只保存回调指针，未调
+  `esp_lcd_panel_io_register_event_callbacks` 注册 ISR。
+- **后果**：ESP32 第二个帧会永久阻塞在 `xSemaphoreTake`。
+- **修复**：在 `hw_display_set_flush_ready_cb` 中添加 ISR 注册/注销逻辑。
+- **验证**：代码审查 + 编译通过。⚠️ 待烧机验证。
+
 ## 性能基准（ESP32-WROVER 240MHz, 160×128 RGB565, NB_INTERP=8）
+
+### 优化前
 
 | 立方体数 | 可见三角形 | FPS |
 |----------|-----------|-----|
@@ -79,6 +132,26 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 | 4 | 24 | 53 |
 | 9 | 54 | 45 |
 | 16 | 96 | 37 |
+
+### 优化后（待烧机测试）
+
+| 优化 | 预期效果 | 状态 |
+|------|---------|------|
+| 双 framebuffer + 异步 DMA | FPS +30%（隐藏 ~8ms SPI 传输） | ⚠️ 待烧机 |
+| 渲染任务核心绑定 | 稳定性提升，消除中断抢占 | ⚠️ 待烧机 |
+| 天空盒细分（4×4/面） | 纹理正确（96 四边形，无性能回退） | ✅ PC 验证 |
+| 仿射纹理 API | 可选加速（~20% FPS for 大面） | ✅ 已实现 |
+
+> **ESP32 FPU 笔记**：Xtensa LX6 有硬件单精度 FPU，`1.0f / fzl` ~20 cycles。
+> 1/z LUT 查表 + 插值 ≥20 cycles + 精度损失，**已放弃 LUT 方案**。
+
+### 模拟器性能趋势
+
+| 优化 | 优化前帧时间 (PC) | 优化后帧时间 (PC) | 趋势 |
+|------|-------------------|-------------------|------|
+| 双 framebuffer | 1.0x | 1.0x（模拟器同步 swap） | — |
+| 天空盒细分 | 1.0x | ~0.97x（略有下降） | 可接受 |
+| 核心绑定 | 1.0x | 1.0x（模拟器单线程） | — |
 
 ## 待解决问题
 
@@ -88,19 +161,28 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 - **已排除**：渲染算法（截图 98-99% 覆盖，0% 黑色）、近裁切、深度测试。
 - **怀疑方向**：
   - DMA flush 异步（`trans_queue_depth=10`），下一帧渲染覆盖正在传输的 pbuf？
-    但渲染 15ms > DMA 8ms，理论上不重叠。
+    但渲染 15ms > DMA 8ms，理论上不重叠。**双 framebuffer 应该解决此问题**。
   - 帧间 GL 状态泄漏（天空盒 `glDepthMask`/`glCullFace` 恢复不完整？）。
   - Z-buffer 清除在某些角度不可靠。
-- **下一步**：加 zbuf[0] 帧间诊断，确认 `glClear` 每帧生效；检查天空盒状态恢复。
+- **下一步**：烧机测试双 framebuffer 是否修复丢失多边形问题。
 
-### 天空盒纹理扭曲
+### 烧机验证清单
 
-- 大面（s=15）透视校正纹理映射在角落 1/z 变化剧烈，纹理拉伸。
-- 考虑：天空盒专用投影矩阵、或简化为纯色渐变。
+- [ ] ESP32 编译通过（`idf.py build`）✅ 已验证
+- [ ] 串口监控功能正常（debug console 可交互）
+- [ ] 双 framebuffer DMA ISR 正确触发（无死锁）
+- [ ] FPS 对比（优化前 vs 优化后）
+- [ ] 旋转中丢失多边形是否消失
+- [ ] 核心绑定 `xPortGetCoreID()` 确认
+- [ ] 长时间运行稳定性（≥ 10 分钟）
 
 ## 维护备忘
 
 - `components/tinygl/` 是 vendor 版本（非 submodule）。本地补丁：16 位模式、
   `TGL_PIXEL_BYTE_SWAP`/`TGL_TEXTURE_BYTE_SWAP` 宏、`TGL_FEATURE_LIT_TEXTURES=0`、
-  `clear.c` Z 值、`NB_INTERP=8`。
+  `clear.c` Z 值、`NB_INTERP=8`、`ZB_fillTriangleMappingAffine/AffineNOBLEND`。
 - `components/debug_console/CMakeLists.txt` 必须保持 `TGL_PIXEL_BYTE_SWAP=1` 与 TinyGL 一致。
+- **新增**：`GLContext.use_affine_texture` 标志（`zgl.h`），仿射/透视纹理切换。
+- **新增**：双 framebuffer DMA 依赖 `hw_display_set_flush_ready_cb` 已注册 ISR。
+- **新增**：PC 模拟器 `tools/tinygl_emu/`，`make test-runner` 回归测试。
+- `ztriangle.c` 中 `TGL_FEATURE_ZINV_LUT` 开关保留但默认 `0`（不建议启用）。
