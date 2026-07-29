@@ -228,4 +228,16 @@ void hw_display_set_flush_ready_cb(hw_display_flush_ready_cb_t cb, void *ctx)
     s_flush_ready_ctx = ctx;
     __sync_synchronize();
     s_flush_ready_cb = cb;
+
+    /* Register (or unregister) the ISR callback with the panel-IO driver.
+     * The callback is invoked from the SPI trans-complete ISR. */
+    if (cb) {
+        esp_lcd_panel_io_callbacks_t cbs = {
+            .on_color_trans_done = display_flush_ready_isr,
+        };
+        ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(s_lcd_io_handle, &cbs, ctx));
+    } else {
+        esp_lcd_panel_io_callbacks_t cbs = {0};
+        ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(s_lcd_io_handle, &cbs, NULL));
+    }
 }

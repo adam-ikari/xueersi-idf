@@ -70,7 +70,7 @@ static void *st7735_init(int w, int h, int pixel_format)
         ESP_LOGE(TAG, "Failed to create DMA semaphore");
         return NULL;
     }
-    hw_display_set_flush_ready_cb((void*)flush_ready_cb, s_dma_done_sem);
+    hw_display_set_flush_ready_cb(flush_ready_cb, s_dma_done_sem);
 #endif
 
     hw_display_on();

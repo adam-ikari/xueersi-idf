@@ -1,5 +1,10 @@
 #include "msghandling.h"
 #include "zgl.h"
+
+#if TGL_FEATURE_ZINV_LUT == 1
+extern void zinv_lut_init(void);
+#endif
+
 GLContext gl_ctx;
 static const GLContext empty_gl_ctx = {0};
 
@@ -335,6 +340,9 @@ void glInit(void* zbuffer1) {
 #endif
 	c->zEnableSpecular = 0;
 	c->use_affine_texture = 0;
+#if TGL_FEATURE_ZINV_LUT == 1
+	zinv_lut_init();
+#endif
 	/* depth test */
 	c->zb->depth_test = 0;
 	c->zb->depth_write = 1;

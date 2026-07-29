@@ -34,6 +34,12 @@ And because some systems may have float types which are incompatible with it.
 #define TGL_FEATURE_LIT_TEXTURES   0
 /* Disabled — RGB_MIX_FUNC precision loss causes R/B attenuation on 16-bit targets.
  * With white vertex color (glColor 1,1,1) the texture renders at full intensity. */
+
+/* 1/z LUT for perspective texture mapping.
+ * Replaces float division with table lookup + linear interpolation.
+ * Set 1 to test performance vs hardware FPU division on ESP32. */
+#define TGL_FEATURE_ZINV_LUT      0
+
 /*Enable the patternized "discard"-ing of pixels.*/
 #define TGL_FEATURE_POLYGON_STIPPLE 1
 /*Enable the use of GL_SELECT and GL_FEEDBACK*/

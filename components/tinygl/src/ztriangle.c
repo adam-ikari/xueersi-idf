@@ -265,6 +265,43 @@ void ZB_setTexture(ZBuffer* zb, PIXEL* texture) { zb->current_texture = texture;
 
 #if 1
 
+/*
+ * ZINV -- reciprocal of z for perspective-correct texture mapping.
+ * On ESP32 (single-precision FPU), float division ~20 cycles.
+ * The LUT path trades LUT access + interpolation for that division.
+ * Toggle via TGL_FEATURE_ZINV_LUT in zfeatures.h, test with `fps` command.
+ */
+#if TGL_FEATURE_ZINV_LUT == 1
+#define ZINV_LUT_SIZE 1024
+static uint16_t zinv_lut[ZINV_LUT_SIZE];
+static int zinv_lut_inited = 0;
+
+void zinv_lut_init(void) {
+    if (zinv_lut_inited) return;
+    for (int i = 0; i < ZINV_LUT_SIZE; i++) {
+        float z = ((float)i / (float)(ZINV_LUT_SIZE - 1)) * 50.0f + 0.5f;
+        float inv = 1.0f / z;
+        zinv_lut[i] = (uint16_t)(inv * 65536.0f);
+    }
+    zinv_lut_inited = 1;
+}
+
+static inline float fast_inv_z(float fzl) {
+    float fidx = (fzl - 0.5f) / 50.0f * (float)(ZINV_LUT_SIZE - 1);
+    if (fidx < 0.0f) fidx = 0.0f;
+    if (fidx > (float)(ZINV_LUT_SIZE - 2)) fidx = (float)(ZINV_LUT_SIZE - 2);
+    int idx = (int)fidx;
+    float frac = fidx - (float)idx;
+    uint16_t v0 = zinv_lut[idx];
+    uint16_t v1 = zinv_lut[idx + 1];
+    float interp = (float)v0 + ((float)v1 - (float)v0) * frac;
+    return interp / 65536.0f;
+}
+#define ZINV(fzl) fast_inv_z(fzl)
+#else
+#define ZINV(fzl) (1.0f / (fzl))
+#endif
+
 #define DRAW_LINE_TRI_TEXTURED()                                                                                                                               \
 	{                                                                                                                                                          \
 		register GLushort* pz;                                                                                                                                 \
@@ -275,7 +312,7 @@ void ZB_setTexture(ZBuffer* zb, PIXEL* texture) { zb->current_texture = texture;
 		GLfloat sz, tz, fzl, zinv;                                                                                                                             \
 		n = (x2 >> 16) - x1;                                                                                                                                   \
 		fzl = (GLfloat)z1;                                                                                                                                     \
-		zinv = 1.0 / fzl;                                                                                                                                      \
+		zinv = ZINV(fzl);                                                                                                                                      \
 		pp = (PIXEL*)((GLbyte*)pp1 + x1 * PSZB);                                                                                                               \
 		pz = pz1 + x1;                                                                                                                                         \
 		z = z1;                                                                                                                                                \
@@ -293,7 +330,7 @@ void ZB_setTexture(ZBuffer* zb, PIXEL* texture) { zb->current_texture = texture;
 				dtdx = (GLint)((dtzdx - tt * fdzdx) * zinv);                                                                                                   \
 			}                                                                                                                                                  \
 			fzl += fndzdx;                                                                                                                                     \
-			zinv = 1.0 / fzl;                                                                                                                                  \
+			zinv = ZINV(fzl);                                                                                                                                  \
 			PUT_PIXEL(0); /*the_x++;*/                                                                                                                         \
 			PUT_PIXEL(1); /*the_x++;*/                                                                                                                         \
 			PUT_PIXEL(2); /*the_x++;*/                                                                                                                         \
