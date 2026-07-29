@@ -176,6 +176,27 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 - [ ] 核心绑定 `xPortGetCoreID()` 确认
 - [ ] 长时间运行稳定性（≥ 10 分钟）
 
+## TinyGL 适配性评估（2026-07-29）
+
+### 结论：TinyGL 是当前最务实的选择，不建议替换
+
+| 方案 | 适配度 | 说明 |
+|------|--------|------|
+| TinyGL (C-Chads) | ★★★★ | 已集成、API 完整、PC 模拟器可验证 |
+| 自研定点光栅器 | ★★★☆ | 理论最优 3-5x 性能，但开发代价大 |
+| SDL3 软件渲染 | ★☆☆☆ | 只支持 2D，不支持 3D |
+| Mesa/GL4ES | ☆☆☆☆ | 代码量巨大，无法移植到 ESP32 |
+
+ESP32 Xtensa LX6 有硬件 FPU，`1/z` 除法约 20 cycles，不是瓶颈。
+实际瓶颈排序：SPI DMA 传输 > PSRAM 访问延迟 > 1/z 除法 > 格式转换。
+
+### 建议的优化方向（在 TinyGL 框架内）
+
+1. 纹理缓存预热（DRAM 缓存热点行）
+2. span-based 渲染替代逐像素 PUT_PIXEL
+3. 双核分工（核心 0 物理/I2C，核心 1 渲染）— 已实现
+4. Xtensa MAC16 指令加速 565 颜色混合
+
 ## 维护备忘
 
 - `components/tinygl/` 是 vendor 版本（非 submodule）。本地补丁：16 位模式、
