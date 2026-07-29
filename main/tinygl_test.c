@@ -259,11 +259,21 @@ static void *tinygl_wasm_task(void *arg)
     ESP_LOGI(TAG, "Entering WASM game loop");
 
     /* Reuse a single exec env for the entire game loop — creating/destroying
-     * one per frame causes heap fragmentation and eventual crash on ESP32. */
+     * one per frame causes heap fragmentation and eventual restart on ESP32. */
     wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 32768);
     if (!env) {
         ESP_LOGE(TAG, "Create exec env failed");
         return NULL;
+    }
+
+    /* Prime the pump: first call often triggers lazy init inside WAMR.
+     * Do it once with error checking before entering the tight loop. */
+    ESP_LOGI(TAG, "Calling game_update for the first time...");
+    vTaskDelay(pdMS_TO_TICKS(20));
+    if (wasm_runtime_call_wasm(env, fn_update, 0, NULL)) {
+        ESP_LOGI(TAG, "First game_update OK");
+    } else {
+        ESP_LOGE(TAG, "First game_update failed: %s", wasm_runtime_get_exception(inst));
     }
 
     int64_t last_us = esp_timer_get_time();

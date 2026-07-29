@@ -33,7 +33,7 @@ idf_component_register(SRCS "main.c"
 target_link_libraries(${COMPONENT_LIB} PRIVATE m)
 
 # Enable WAMR WASM game demo on core 0 (comment out to disable)
-target_compile_definitions(${COMPONENT_LIB} PRIVATE TGL_WASM_GAME=1)
+# target_compile_definitions(${COMPONENT_LIB} PRIVATE TGL_WASM_GAME=1)
 
 # Conditionally compile sdl_demo.c when SDL demo is enabled
 if(CONFIG_XIAOMIAO_USE_SDL)
