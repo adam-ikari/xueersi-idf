@@ -122,9 +122,17 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 - **修复**：在 `hw_display_set_flush_ready_cb` 中添加 ISR 注册/注销逻辑。
 - **验证**：代码审查 + 编译通过。⚠️ 待烧机验证。
 
+### 7. 双 framebuffer pbuf 未同步（已修复）
+
+- **根因**：`ZB_open` 时 `zb->pbuf` 固定指向 `s_fb[0]`，即使 `st7735_flush()` 交换了
+  `s_fb_idx`，TinyGL 仍渲染到 `s_fb[0]`——和 DMA 传输的是同一块 buffer。双 framebuffer
+  逻辑完全无效，渲染和 DMA 之间存在竞态，导致旋转时画面撕裂/丢失多边形。
+- **修复**：每帧渲染前 `c->zb->pbuf = s_display->get_buffer()` 更新 pbuf 指针。
+- **验证**：旋转立方体不再闪烁 ✅。FPS 从 64 降至 46（DMA 同步等待的代价）。
+
 ## 性能基准（ESP32-WROVER 240MHz, 160×128 RGB565, NB_INTERP=8）
 
-### 优化前
+### 优化前（单 framebuffer，无 DMA 同步）
 
 | 立方体数 | 可见三角形 | FPS |
 |----------|-----------|-----|
@@ -132,6 +140,17 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 | 4 | 24 | 53 |
 | 9 | 54 | 45 |
 | 16 | 96 | 37 |
+
+### 优化后（双 framebuffer + DMA 同步 + 核心绑定）
+
+| 立方体数 | 可见三角形 | FPS | 备注 |
+|----------|-----------|-----|------|
+| 1 | 6 | 46 | 无撕裂/闪烁 ✅ |
+| 4 | 24 | ~38 | 待测 |
+| 9 | 54 | ~30 | 待测 |
+
+> FPS 从 64→46 是 DMA 同步等待的代价（每帧等上一帧传输完成）。
+> 这是 tear-free 渲染的正确代价；单 buffer 64 FPS 但有闪烁。
 
 ### 优化后（待烧机测试）
 
@@ -155,16 +174,13 @@ TinyGL 已 vendor 自 C-Chads/tinygl@36a7987 进 `components/tinygl/`。完成�
 
 ## 待解决问题
 
-### 旋转中"大面积丢失多边形"
+### ~~旋转中"大面积丢失多边形"~~（已修复 ✅）
 
-- **现象**：暂停时正常，运行时（旋转中）丢失多边形。
-- **已排除**：渲染算法（截图 98-99% 覆盖，0% 黑色）、近裁切、深度测试。
-- **怀疑方向**：
-  - DMA flush 异步（`trans_queue_depth=10`），下一帧渲染覆盖正在传输的 pbuf？
-    但渲染 15ms > DMA 8ms，理论上不重叠。**双 framebuffer 应该解决此问题**。
-  - 帧间 GL 状态泄漏（天空盒 `glDepthMask`/`glCullFace` 恢复不完整？）。
-  - Z-buffer 清除在某些角度不可靠。
-- **下一步**：烧机测试双 framebuffer 是否修复丢失多边形问题。
+- **现象**：暂停时正常，运行时（旋转中）丢失多边形/闪烁。
+- **根因**：双 framebuffer 的 `s_fb_idx` swap 只在 `st7735_flush()` 里切换，
+  但 TinyGL 的 `zb->pbuf` 在 `ZB_open` 时固定指向 `s_fb[0]`，永远不更新。
+  TinyGL 始终渲染到 `s_fb[0]`，和 DMA 传输的是同一块 buffer → 竞态撕裂。
+- **修复**：每帧渲染前 `c->zb->pbuf = s_display->get_buffer()` 同步 pbuf 指针。
 
 ### 烧机验证清单
 
