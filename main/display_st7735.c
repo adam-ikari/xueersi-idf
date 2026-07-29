@@ -6,9 +6,21 @@
  */
 
 #include "display_backend.h"
+
+#ifdef TGL_EMU_BUILD
+/* PC emulator: stubs for hw_display functions — not used at runtime */
+#include "esp_compat.h"
+#include "esp_heap_caps.h"
+static void hw_display_on(void) {}
+static void hw_display_flush(int x1, int y1, int x2, int y2, const uint8_t *px_map) {
+    (void)x1; (void)y1; (void)x2; (void)y2; (void)px_map;
+}
+#else
 #include "hw_display.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#endif
+
 #include <string.h>
 
 static const char *TAG = "st7735_be";

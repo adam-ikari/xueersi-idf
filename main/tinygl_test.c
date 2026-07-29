@@ -19,7 +19,9 @@
 #include "zgl.h"            /* gl_get_context for diag */
 
 #include "display_backend.h"
+#ifndef TGL_EMU_BUILD
 #include "hw_board.h"
+#endif
 
 #include "texture_ceramic.h"   /* compile-time generated, in build dir */
 #include "texture_checker.h"
@@ -27,10 +29,15 @@
 #include "texture_grid.h"
 #include "tinygl_physics.h"
 
+#ifndef TGL_EMU_BUILD
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#else
+/* PC emulator shims — esp_compat.h provides ESP_LOGI and esp_timer_get_time */
+#include "esp_compat.h"
+#endif
 
 #include <math.h>
 #include <string.h>
@@ -56,8 +63,8 @@ volatile int tinygl_physics_mode = 0;
 /* Cube count — adjustable via debug console for stress testing. */
 volatile int tinygl_cube_count = 1;
 
-/* Display backend — initialized in tinygl_benchmark */
-static const display_backend_t *s_display = NULL;
+/* Display backend — set by platform entry point before calling gl_init */
+const display_backend_t *s_display = NULL;
 
 /* ── Framebuffer + Zbuffer ───────────────────────────── */
 static ZBuffer *s_zb  = NULL;
@@ -192,7 +199,7 @@ static void gl_flush_to_display(void)
 }
 
 /* ── TinyGL init ─────────────────────────────────────── */
-static int gl_init(int w, int h)
+int gl_init(int w, int h)
 {
     s_width  = w;
     s_height = h;
@@ -259,7 +266,7 @@ static int gl_init(int w, int h)
 }
 
 /* ── Render a single frame ───────────────────────────── */
-static void render_frame(float angle_y)
+void render_frame(float angle_y)
 {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
@@ -309,6 +316,7 @@ static void render_frame(float angle_y)
 }
 
 /* ── Benchmark task ──────────────────────────────────── */
+#ifndef TGL_EMU_BUILD
 void *tinygl_benchmark(void *arg)
 {
     (void)arg;
@@ -362,3 +370,4 @@ void *tinygl_benchmark(void *arg)
         }
     }
 }
+#endif /* !TGL_EMU_BUILD */
