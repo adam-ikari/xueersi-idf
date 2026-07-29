@@ -338,19 +338,15 @@ static void tinygl_render_task(void *arg)
         frame_start_us = esp_timer_get_time();
 
         if (!tinygl_render_paused) {
-            /* Update pbuf to current render buffer (dual-fb swap) */
-            GLContext *c = gl_get_context();
-            if (c && c->zb) {
-                c->zb->pbuf = (PIXEL *)s_display->get_buffer();
-            }
             render_frame(angle_y);
+            frame_count++;
             frame_count++;
             angle_y += 2.0f;
         }
 
         int64_t frame_elapsed = esp_timer_get_time() - frame_start_us;
-        if (frame_elapsed < 16667) {
-            vTaskDelay(pdMS_TO_TICKS((16667 - frame_elapsed) / 1000));
+        if (frame_elapsed < 33333) {   /* 30 FPS = 33.3ms/frame */
+            vTaskDelay(pdMS_TO_TICKS((33333 - frame_elapsed) / 1000));
         } else {
             vTaskDelay(1);
         }

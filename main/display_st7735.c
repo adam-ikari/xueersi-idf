@@ -2,8 +2,8 @@
  * ST7735 display backend implementation for the display_backend_t interface.
  *
  * 160x128 RGB565 byte-swapped, SPI2 DMA through hw_display_flush.
- * Dual framebuffers allocated in DMA-capable internal DRAM for async
- * transfer — render into one while DMA transmits the other.
+ * Single framebuffer mode: render into buffer, wait for DMA complete, then
+ * start next frame. Simple and tear-free at 30 FPS (23ms render+DMA < 33ms).
  */
 
 #include "display_backend.h"
@@ -29,12 +29,11 @@ static void hw_display_set_flush_ready_cb(void *cb, void *ctx) { (void)cb; (void
 
 static const char *TAG = "st7735_be";
 
-/* Dual framebuffer: render to one while DMA transmits the other */
-static uint16_t *s_fb[2]   = {NULL, NULL};
-static int       s_fb_idx   = 0;  /* which buffer TinyGL renders into */
-static int       s_w        = 0;
-static int       s_h        = 0;
-static int       s_fmt      = 0;
+/* Single framebuffer with DMA sync */
+static uint16_t *s_fb     = NULL;
+static int       s_w      = 0;
+static int       s_h      = 0;
+static int       s_fmt    = 0;
 
 #ifndef TGL_EMU_BUILD
 static SemaphoreHandle_t s_dma_done_sem = NULL;
@@ -53,16 +52,13 @@ static void *st7735_init(int w, int h, int pixel_format)
     s_h   = h;
     s_fmt = pixel_format;
 
-    s_fb[0] = (uint16_t *)heap_caps_malloc(w * h * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-    s_fb[1] = (uint16_t *)heap_caps_malloc(w * h * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-    if (!s_fb[0] || !s_fb[1]) {
-        ESP_LOGE(TAG, "Failed to allocate dual framebuffers");
+    s_fb = (uint16_t *)heap_caps_malloc(w * h * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
+    if (!s_fb) {
+        ESP_LOGE(TAG, "Failed to allocate framebuffer");
         return NULL;
     }
 
-    memset(s_fb[0], 0, w * h * 2);
-    memset(s_fb[1], 0, w * h * 2);
-    s_fb_idx = 0;
+    memset(s_fb, 0, w * h * 2);
 
 #ifndef TGL_EMU_BUILD
     s_dma_done_sem = xSemaphoreCreateBinary();
@@ -74,44 +70,38 @@ static void *st7735_init(int w, int h, int pixel_format)
 #endif
 
     hw_display_on();
-    ESP_LOGI(TAG, "ST7735 dual-fb backend: %dx%d fmt=%d, fb[0]=%p fb[1]=%p", w, h, pixel_format, s_fb[0], s_fb[1]);
-    return s_fb[0];  /* start rendering into buffer 0 */
+    ESP_LOGI(TAG, "ST7735 single-fb backend: %dx%d fmt=%d, fb=%p", w, h, pixel_format, s_fb);
+    return s_fb;
 }
 
 static void st7735_clear(uint16_t color)
 {
-    uint16_t *fb = s_fb[s_fb_idx];
-    if (!fb) return;
+    if (!s_fb) return;
     for (int i = 0; i < s_w * s_h; i++) {
-        fb[i] = color;
+        s_fb[i] = color;
     }
 }
 
 static void st7735_flush(void)
 {
-    uint16_t *fb = s_fb[s_fb_idx];
-    if (!fb) return;
+    if (!s_fb) return;
 
 #ifndef TGL_EMU_BUILD
-    /* Wait for previous DMA to complete */
+    /* Wait for previous DMA to complete before starting new one */
     if (s_dma_busy) {
         xSemaphoreTake(s_dma_done_sem, portMAX_DELAY);
         s_dma_busy = false;
     }
 
-    /* Start DMA of current render buffer */
+    /* Start DMA */
     s_dma_busy = true;
-    hw_display_flush(0, 0, s_w - 1, s_h - 1, (uint8_t *)fb);
-
-    /* Swap to other buffer for next frame */
-    s_fb_idx ^= 1;
+    hw_display_flush(0, 0, s_w - 1, s_h - 1, (uint8_t *)s_fb);
 #else
-    /* PC emulator: synchronous flush */
-    s_fb_idx ^= 1;
+    /* PC emulator: synchronous flush (no DMA) */
 #endif
 }
 
-static void *st7735_get_buffer(void)  { return s_fb[s_fb_idx]; }
+static void *st7735_get_buffer(void)  { return s_fb; }
 static int  st7735_get_width(void)   { return s_w; }
 static int  st7735_get_height(void)  { return s_h; }
 
