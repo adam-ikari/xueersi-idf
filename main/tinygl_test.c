@@ -67,7 +67,7 @@ volatile int tinygl_cube_count = 1;
 const display_backend_t *s_display = NULL;
 
 /* ── Framebuffer + Zbuffer ───────────────────────────── */
-static ZBuffer *s_zb  = NULL;
+ZBuffer *s_zb  = NULL;
 static int s_width  = 160;
 static int s_height = 128;
 
