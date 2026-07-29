@@ -50,10 +50,10 @@ int main(int argc, char **argv)
     /* Check for test mode */
     if (argc > 1 && strcmp(argv[1], "--test-rasterizer") == 0) {
         test_result_t results[16];
-        int n = test_rasterizer_run(results, 16);
+        int total = test_rasterizer_run(results, 16);
         int passed = 0, failed = 0;
         printf("=== Rasterizer Unit Tests ===\n");
-        for (int i = 0; i < n; i++) {
+        for (int i = 0; i < total; i++) {
             printf("[%s] %s", results[i].passed ? "PASS" : "FAIL", results[i].name);
             if (!results[i].passed) {
                 printf(" (diff_pixels=%d", results[i].diff_pixels);
@@ -65,7 +65,7 @@ int main(int argc, char **argv)
             }
             printf("\n");
         }
-        printf("=== Results: %d passed, %d failed out of %d ===\n", passed, failed, n);
+        printf("=== Results: %d passed, %d failed out of %d ===\n", passed, failed, total);
         return failed > 0 ? 1 : 0;
     }
 

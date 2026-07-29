@@ -228,5 +228,5 @@ int test_rasterizer_run(test_result_t* results, int max_results) {
         count++;
     }
 
-    return passed;
+    return count;
 }

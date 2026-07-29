@@ -10,7 +10,8 @@ typedef struct {
 } test_result_t;
 
 // 运行所有 rasterizer 测试
-// 返回：通过测试的数量（不是总数），results 数组由调用者提供（大小 >= 16）
+// 返回：测试总数（results 数组由调用者提供，大小 >= 16）
+// 调用者通过遍历 results[0..return_value-1] 统计通过/失败数
 int test_rasterizer_run(test_result_t* results, int max_results);
 
 #endif
