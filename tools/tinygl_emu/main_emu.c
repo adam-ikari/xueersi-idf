@@ -22,6 +22,8 @@
 #include "GL/gl.h"
 #include "zbuffer.h"
 
+#include "test_rasterizer.h"
+
 /* Symbols exported from main/tinygl_test.c (compiled with TGL_EMU_BUILD) */
 extern int  gl_init(int w, int h);
 extern void render_frame(float angle_y);
@@ -45,8 +47,27 @@ static void signal_handler(int sig)
 
 int main(int argc, char **argv)
 {
-    (void)argc;
-    (void)argv;
+    /* Check for test mode */
+    if (argc > 1 && strcmp(argv[1], "--test-rasterizer") == 0) {
+        test_result_t results[16];
+        int n = test_rasterizer_run(results, 16);
+        int passed = 0, failed = 0;
+        printf("=== Rasterizer Unit Tests ===\n");
+        for (int i = 0; i < n; i++) {
+            printf("[%s] %s", results[i].passed ? "PASS" : "FAIL", results[i].name);
+            if (!results[i].passed) {
+                printf(" (diff_pixels=%d", results[i].diff_pixels);
+                if (results[i].error_msg) printf(", error=%s", results[i].error_msg);
+                printf(")");
+                failed++;
+            } else {
+                passed++;
+            }
+            printf("\n");
+        }
+        printf("=== Results: %d passed, %d failed out of %d ===\n", passed, failed, n);
+        return failed > 0 ? 1 : 0;
+    }
 
     signal(SIGINT, signal_handler);
 
