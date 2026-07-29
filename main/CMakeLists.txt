@@ -3,7 +3,6 @@ idf_component_register(SRCS "main.c"
                                      "input_api.c"
                                      "audio_api.c"
                                      "tinygl_test.c"
-                                     "tinygl_pipeline.c"
                                      "tinygl_physics.c"
                                      "display_st7735.c"
                        PRIV_REQUIRES esp_lcd
