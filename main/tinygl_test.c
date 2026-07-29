@@ -561,7 +561,6 @@ static void tinygl_render_task(void *arg)
         }
     }
 }
-#endif
 
 /* ── Platform entry point ───────────────────────────────
  * Core 0: physics simulation + debug console (idle loop)
