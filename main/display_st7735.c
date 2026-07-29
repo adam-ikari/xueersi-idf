@@ -2,8 +2,17 @@
  * ST7735 display backend implementation for the display_backend_t interface.
  *
  * 160x128 RGB565 byte-swapped, SPI2 DMA through hw_display_flush.
- * Single framebuffer mode: render into buffer, wait for DMA complete, then
- * start next frame. Simple and tear-free at 30 FPS (23ms render+DMA < 33ms).
+ * Single framebuffer with DMA sync: flush() starts DMA and returns immediately.
+ * wait_dma() must be called at the START of each frame (before glClear) to
+ * ensure the previous frame's DMA transfer is complete — otherwise rendering
+ * would corrupt the buffer being transmitted by DMA, causing tearing.
+ *
+ * Timeline per frame:
+ *   wait_dma()  — block until previous DMA done (0–8ms)
+ *   glClear()   — safe to write pbuf now
+ *   render()    — draw geometry (~15ms)
+ *   flush()     — start DMA of current frame, return immediately
+ *   vTaskDelay  — yield, remaining time to 30fps target
  */
 
 #include "display_backend.h"
@@ -29,7 +38,6 @@ static void hw_display_set_flush_ready_cb(void *cb, void *ctx) { (void)cb; (void
 
 static const char *TAG = "st7735_be";
 
-/* Single framebuffer with DMA sync */
 static uint16_t *s_fb     = NULL;
 static int       s_w      = 0;
 static int       s_h      = 0;
@@ -82,22 +90,28 @@ static void st7735_clear(uint16_t color)
     }
 }
 
+/* Wait for previous frame's DMA to complete. Called at START of each frame
+ * before any pbuf writes, so rendering doesn't corrupt the buffer being
+ * transmitted. Overlaps the wait with vTaskDelay from the frame limiter. */
+static void st7735_wait_dma(void)
+{
+#ifndef TGL_EMU_BUILD
+    if (s_dma_busy) {
+        xSemaphoreTake(s_dma_done_sem, portMAX_DELAY);
+        s_dma_busy = false;
+    }
+#endif
+}
+
+/* Start DMA transfer of current frame. Returns immediately — DMA runs
+ * in background. The next st7735_wait_dma() will synchronize. */
 static void st7735_flush(void)
 {
     if (!s_fb) return;
 
 #ifndef TGL_EMU_BUILD
-    /* Wait for previous DMA to complete before starting new one */
-    if (s_dma_busy) {
-        xSemaphoreTake(s_dma_done_sem, portMAX_DELAY);
-        s_dma_busy = false;
-    }
-
-    /* Start DMA */
-    s_dma_busy = true;
     hw_display_flush(0, 0, s_w - 1, s_h - 1, (uint8_t *)s_fb);
-#else
-    /* PC emulator: synchronous flush (no DMA) */
+    s_dma_busy = true;
 #endif
 }
 
@@ -109,6 +123,7 @@ const display_backend_t st7735_display_backend = {
     .init       = st7735_init,
     .clear      = st7735_clear,
     .flush      = st7735_flush,
+    .wait_dma   = st7735_wait_dma,
     .get_buffer = st7735_get_buffer,
     .get_width  = st7735_get_width,
     .get_height = st7735_get_height,

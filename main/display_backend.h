@@ -13,6 +13,7 @@ typedef struct {
     void   *(*init)(int width, int height, int pixel_format);
     void   (*clear)(uint16_t color);
     void   (*flush)(void);
+    void   (*wait_dma)(void);       /* wait for previous DMA to complete */
     void  *(*get_buffer)(void);
     int    (*get_width)(void);
     int    (*get_height)(void);

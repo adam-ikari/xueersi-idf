@@ -338,15 +338,30 @@ static void tinygl_render_task(void *arg)
         frame_start_us = esp_timer_get_time();
 
         if (!tinygl_render_paused) {
+            /* Wait for previous frame's DMA to complete before writing pbuf.
+             * This prevents rendering from corrupting the buffer being
+             * transmitted — the root cause of the "missing polygon" flicker. */
+            s_display->wait_dma();
+
             render_frame(angle_y);
-            frame_count++;
             frame_count++;
             angle_y += 2.0f;
         }
 
+        /* Frame rate limiter: target 30 FPS for stable, tear-free display.
+         * The ST7735 has no TE pin, so exceeding 30 FPS causes visible
+         * micro-tearing. Lock at 30 FPS for buttery smooth visuals. */
         int64_t frame_elapsed = esp_timer_get_time() - frame_start_us;
-        if (frame_elapsed < 33333) {   /* 30 FPS = 33.3ms/frame */
-            vTaskDelay(pdMS_TO_TICKS((33333 - frame_elapsed) / 1000));
+        int64_t target_frame_us = 33333;  /* 30 FPS = 33.3ms */
+        if (frame_elapsed < target_frame_us) {
+            int64_t remain_us = target_frame_us - frame_elapsed;
+            if (remain_us > 1000) {
+                vTaskDelay(pdMS_TO_TICKS(remain_us / 1000));
+            }
+            /* Fine-spin remaining <1ms for precision */
+            while (esp_timer_get_time() - frame_start_us < target_frame_us) {
+                /* busy wait, but very short (<1ms) */
+            }
         } else {
             vTaskDelay(1);
         }
