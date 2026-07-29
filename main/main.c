@@ -51,6 +51,9 @@
 #include "hw_sd.h"
 
 #include "tinygl_test.h"
+#include "render_api.h"
+#include "render_queue.h"
+#include "tinygl_physics.h"
 
 #include "debug_console.h"
 
@@ -1408,10 +1411,116 @@ void app_main(void)
      * while the 3D render loop runs; GL state is NULL until glInit. */
     debug_console_start();
 
-    /* TinyGL benchmark — replace WAMR Canvas test for GPU performance check */
+    /* ── WASM 3D Game Demo ──────────────────────────────────
+     * Core 0: WAMR wasm game logic + physics
+     * Core 1: TinyGL native rendering
+     *
+     * The wasm module calls render_submit_cube() / physics_step()
+     * host functions; core 1 drains the render queue each frame. */
     {
-        pthread_t tinygl_thread;
-        pthread_create(&tinygl_thread, NULL, tinygl_benchmark, NULL);
-        pthread_join(tinygl_thread, NULL);
+        RuntimeInitArgs init_args;
+        memset(&init_args, 0, sizeof(init_args));
+        init_args.mem_alloc_type = Alloc_With_Pool;
+        init_args.mem_alloc_option.pool.heap_buf = malloc(256 * 1024);
+        init_args.mem_alloc_option.pool.heap_size = 256 * 1024;
+
+        if (!wasm_runtime_full_init(&init_args)) {
+            ESP_LOGE(TAG, "WAMR init failed");
+            free(init_args.mem_alloc_option.pool.heap_buf);
+            return;
+        }
+        ESP_LOGI(TAG, "WAMR runtime initialized");
+
+        /* Register render + physics Host API */
+        if (!render_api_register()) {
+            ESP_LOGE(TAG, "Render API registration failed");
+        }
+
+        /* Initialize TinyGL pipeline (display + textures + lighting) */
+        extern const display_backend_t st7735_display_backend;
+        const display_backend_t *disp = &st7735_display_backend;
+        disp->init(160, 128, PIXEL_FORMAT_RGB565_SWAP);
+        if (gl_init(160, 128) != 0) {
+            ESP_LOGE(TAG, "gl_init failed");
+        }
+
+        physics_init();
+
+        /* Load and instantiate the wasm game module */
+        char error_buf[128];
+#ifdef CONFIG_WAT2WASM_AVAILABLE
+        #include "wasm_game.wasm.h"
+        wasm_module_t module = wasm_runtime_load(wasm_game_wasm, wasm_game_wasm_len,
+                                                   error_buf, sizeof(error_buf));
+#else
+        #include "wasm_test.wasm.h"
+        wasm_module_t module = wasm_runtime_load(wasm_test_wasm, wasm_test_wasm_len,
+                                                   error_buf, sizeof(error_buf));
+#endif
+        if (!module) {
+            ESP_LOGE(TAG, "WASM load failed: %s", error_buf);
+            wasm_runtime_destroy();
+            return;
+        }
+        ESP_LOGI(TAG, "WASM module loaded");
+
+        wasm_module_inst_t inst = wasm_runtime_instantiate(module, 16384, 0,
+                                                            error_buf, sizeof(error_buf));
+        if (!inst) {
+            ESP_LOGE(TAG, "Instantiate failed: %s", error_buf);
+            wasm_runtime_unload(module);
+            wasm_runtime_destroy();
+            return;
+        }
+        ESP_LOGI(TAG, "WASM instance created");
+
+        /* Call game_init() once */
+        wasm_function_inst_t func_init = wasm_runtime_lookup_function(inst, "game_init");
+        if (func_init) {
+            wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 8192);
+            if (env) {
+                wasm_runtime_call_wasm(env, func_init, 0, NULL);
+                wasm_runtime_destroy_exec_env(env);
+                ESP_LOGI(TAG, "game_init() called");
+            }
+        }
+
+        wasm_function_inst_t func_update = wasm_runtime_lookup_function(inst, "game_update");
+        if (!func_update) {
+            ESP_LOGE(TAG, "game_update() not found");
+        } else {
+            ESP_LOGI(TAG, "game_update() found — entering game loop");
+
+            /* Pin render loop to core 1 */
+            xTaskCreatePinnedToCore(
+                tinygl_render_task,
+                "tinygl_render",
+                8192,
+                NULL,
+                configMAX_PRIORITIES - 1,
+                NULL,
+                1  /* core 1 */
+            );
+
+            /* Core 0: game loop — call wasm game_update() at ~30 Hz */
+            int64_t last_us = esp_timer_get_time();
+            while (1) {
+                wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 8192);
+                if (env) {
+                    wasm_runtime_call_wasm(env, func_update, 0, NULL);
+                    wasm_runtime_destroy_exec_env(env);
+                }
+
+                /* 30 Hz frame pacing */
+                int64_t now_us = esp_timer_get_time();
+                int64_t elapsed_us = now_us - last_us;
+                last_us = now_us;
+                if (elapsed_us < 33333) {
+                    vTaskDelay(pdMS_TO_TICKS((33333 - elapsed_us) / 1000));
+                } else {
+                    vTaskDelay(1);
+                }
+            }
+        }
     }
 }
