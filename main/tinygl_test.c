@@ -329,8 +329,10 @@ static GLuint dither_callback(GLint x, GLint y, GLuint pixel, GLushort z)
 /* ── Copy TinyGL framebuffer to display ────────────────── */
 static void gl_flush_to_display(void)
 {
-    /* Apply ordered dithering to reduce 16-bit color banding */
-    glPostProcess(dither_callback);
+    /* FIXME: glPostProcess(dither_callback) causes color distortion
+     * and drops FPS from 30 to ~10. Disabled until the dither callback
+     * is debugged. */
+    /* glPostProcess(dither_callback); */
     s_display->flush();
 }
 
