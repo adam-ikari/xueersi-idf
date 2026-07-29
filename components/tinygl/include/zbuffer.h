@@ -346,6 +346,9 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer *zb,
 void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer *zb,
                     ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
 
+void ZB_fillTriangleMappingAffine(ZBuffer *zb,
+                    ZBufferPoint *p0,ZBufferPoint *p1,ZBufferPoint *p2);
+
 typedef void (*ZB_fillTriangleFunc)(ZBuffer  *,
 	    ZBufferPoint *,ZBufferPoint *,ZBufferPoint *);
 

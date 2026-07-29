@@ -321,31 +321,20 @@ void render_frame(float angle_y)
     gl_flush_to_display();
 }
 
-/* ── Benchmark task ──────────────────────────────────── */
+/* ── Render task (pinned to core 1) ──────────────────── */
 #ifndef TGL_EMU_BUILD
-void *tinygl_benchmark(void *arg)
+static void tinygl_render_task(void *arg)
 {
     (void)arg;
-
-    extern const display_backend_t st7735_display_backend;
-    s_display = &st7735_display_backend;
-    s_display->init(160, 128, PIXEL_FORMAT_RGB565_SWAP);
-
-    if (gl_init(s_width, s_height) != 0) {
-        ESP_LOGE(TAG, "gl_init failed");
-        return NULL;
-    }
-
-    physics_init();
 
     int frame_count = 0;
     float angle_y = 0;
     int64_t start_us = esp_timer_get_time();
+    int64_t frame_start_us;
 
-    ESP_LOGI(TAG, "TinyGL benchmark started");
+    ESP_LOGI(TAG, "Render task started on core %d", xPortGetCoreID());
 
-    int64_t frame_start_us = 0;
-    while (true) {
+    while (1) {
         frame_start_us = esp_timer_get_time();
 
         if (!tinygl_render_paused) {
@@ -367,13 +356,51 @@ void *tinygl_benchmark(void *arg)
             tinygl_last_fps = fps;
             if (tinygl_log_enabled) {
                 ESP_LOGI(TAG, "=== BENCHMARK RESULT ===");
-                ESP_LOGI(TAG, "Frames: %d in %.2f sec = %.1f FPS",
-                         frame_count, (float)elapsed_us / 1000000.0f, fps);
+                ESP_LOGI(TAG, "Frames: %d in %.2f sec = %.1f FPS (core %d)",
+                         frame_count, (float)elapsed_us / 1000000.0f, fps, xPortGetCoreID());
                 ESP_LOGI(TAG, "=========================");
             }
             frame_count = 0;
             start_us = esp_timer_get_time();
         }
     }
+}
+#endif
+
+/* ── Benchmark task ──────────────────────────────────── */
+#ifndef TGL_EMU_BUILD
+void *tinygl_benchmark(void *arg)
+{
+    (void)arg;
+
+    extern const display_backend_t st7735_display_backend;
+    s_display = &st7735_display_backend;
+    s_display->init(160, 128, PIXEL_FORMAT_RGB565_SWAP);
+
+    if (gl_init(s_width, s_height) != 0) {
+        ESP_LOGE(TAG, "gl_init failed");
+        return NULL;
+    }
+
+    physics_init();
+    ESP_LOGI(TAG, "TinyGL benchmark starting on core 1");
+
+    /* Create render task pinned to core 1 */
+    xTaskCreatePinnedToCore(
+        tinygl_render_task,
+        "tinygl_render",
+        8192,   /* stack size (words) -- larger for FPU context */
+        NULL,
+        configMAX_PRIORITIES - 1,
+        NULL,
+        1       /* core 1 */
+    );
+
+    /* Core 0: idle -- available for debug console, I2C, etc. */
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+
+    return NULL;
 }
 #endif /* !TGL_EMU_BUILD */
