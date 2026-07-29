@@ -71,6 +71,7 @@ static void emu_flush(void) {
     static uint16_t* temp = NULL;
     if (!temp) {
         temp = (uint16_t*)malloc(s_w * s_h * 2);
+        if (!temp) return;  /* out of memory — skip flush */
     }
 
     for (int i = 0; i < s_w * s_h; i++) {

@@ -68,6 +68,9 @@ static frame_test_result_t test_frame_cube1_angle0(void) {
             .get_width = NULL,
             .get_height = NULL,
         };
+        /* Note: .init/.clear/.get_width/.get_height are unused during
+         * headless testing — the render path only calls flush() and
+         * get_buffer() through s_display. */
         s_display = &dummy_display;
         if (gl_init(TEST_W, TEST_H) != 0) {
             r.error_msg = "gl_init failed";

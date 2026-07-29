@@ -210,22 +210,15 @@ static test_result_t test_textured_triangle(void) {
 
 int test_rasterizer_run(test_result_t* results, int max_results) {
     int count = 0;
-    int passed = 0;
 
     if (count < max_results) {
-        results[count] = test_flat_triangle();
-        if (results[count].passed) passed++;
-        count++;
+        results[count++] = test_flat_triangle();
     }
     if (count < max_results) {
-        results[count] = test_smooth_triangle();
-        if (results[count].passed) passed++;
-        count++;
+        results[count++] = test_smooth_triangle();
     }
     if (count < max_results) {
-        results[count] = test_textured_triangle();
-        if (results[count].passed) passed++;
-        count++;
+        results[count++] = test_textured_triangle();
     }
 
     return count;
