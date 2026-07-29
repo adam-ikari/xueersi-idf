@@ -1,12 +1,19 @@
 /**
  * Minimal rigid-body physics for the TinyGL demo scene.
+ *
+ * All active bodies are stored in the globally-visible `s_bodies[]` array
+ * (non-static so core 1 can read positions for rendering while core 0 runs
+ * the simulation). Access to the body array is NOT locked — the renderer
+ * reads positions atomically (floats are 32-bit aligned on ESP32, single-
+ * store atomic on Xtensa) and the physics task writes them with no read-
+ * modify-write cycles on those fields.
  */
 #include "tinygl_physics.h"
 #include <math.h>
 #include <string.h>
 
-static body_t s_bodies[MAX_BODIES];
-static float  s_time;   /* accumulated time, for debugging */
+body_t s_bodies[MAX_BODIES];  /* globally visible for cross-core rendering */
+static float  s_time;          /* accumulated simulation time */
 
 void physics_init(void)
 {

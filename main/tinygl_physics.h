@@ -34,4 +34,9 @@ int  physics_spawn(float x, float y, float z, float hs);  /* returns body id, -1
 body_t *physics_get(int id);
 void physics_step(float dt);  /* advance all active bodies by dt seconds */
 
+/* Direct body array access for cross-core rendering (no lock — floats
+ * are single-store atomic on Xtensa). Core 1 reads position fields;
+ * core 0 writes via physics_step. */
+extern body_t s_bodies[MAX_BODIES];
+
 #endif /* TINYGL_PHYSICS_H */
