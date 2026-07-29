@@ -54,12 +54,12 @@ static frame_test_result_t test_frame_cube1_angle0(void) {
     /* Ensure TinyGL is initialized */
     if (!s_zb) {
         /* Use a dummy display backend that allocates a framebuffer */
-        dummy_fb = (uint16_t*)malloc(160 * 128 * 2);
+        dummy_fb = (uint16_t*)malloc(TEST_W * TEST_H * 2);
         if (!dummy_fb) {
             r.error_msg = "Failed to allocate dummy framebuffer";
             return r;
         }
-        memset(dummy_fb, 0, 160 * 128 * 2);
+        memset(dummy_fb, 0, TEST_W * TEST_H * 2);
         static display_backend_t dummy_display = {
             .init = NULL,
             .clear = NULL,
@@ -69,7 +69,7 @@ static frame_test_result_t test_frame_cube1_angle0(void) {
             .get_height = NULL,
         };
         s_display = &dummy_display;
-        if (gl_init(160, 128) != 0) {
+        if (gl_init(TEST_W, TEST_H) != 0) {
             r.error_msg = "gl_init failed";
             return r;
         }
@@ -86,17 +86,17 @@ static frame_test_result_t test_frame_cube1_angle0(void) {
     uint16_t* fb = (uint16_t*)s_zb->pbuf;
 
     /* Load reference image */
-    uint16_t ref[160 * 128];
-    if (load_ref_image(r.ref_path, ref, 160, 128) < 0) {
+    uint16_t ref[TEST_W * TEST_H];
+    if (load_ref_image(r.ref_path, ref, TEST_W, TEST_H) < 0) {
         /* Reference image does not exist — save current as reference */
-        save_image(r.ref_path, fb, 160, 128);
+        save_image(r.ref_path, fb, TEST_W, TEST_H);
         r.passed = 1;
         r.error_msg = "Reference image created (first run)";
         return r;
     }
 
-    r.diff_pixels = compare_fb(fb, ref, 160, 128);
-    r.diff_percent = (float)r.diff_pixels / (160.0f * 128.0f) * 100.0f;
+    r.diff_pixels = compare_fb(fb, ref, TEST_W, TEST_H);
+    r.diff_percent = (float)r.diff_pixels / (TEST_W * TEST_H) * 100.0f;
     r.passed = (r.diff_pixels < 50);  /* allow < 0.25 % difference */
 
     return r;

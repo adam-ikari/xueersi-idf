@@ -140,3 +140,9 @@ $(TEST_RUNNER): $(TEST_RUNNER_OBJ)
 test-runner: $(TEST_RUNNER)
 	@echo "Running test_runner..."
 	./$(TEST_RUNNER)
+
+# Benchmark target (run interactive benchmark)
+benchmark: $(TARGET)
+	@echo "=== Running interactive benchmark ==="
+	@echo "Press Ctrl+C to stop"
+	./$(TARGET)
