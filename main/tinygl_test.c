@@ -1,16 +1,31 @@
 /**
- * TinyGL benchmark — Utah Teapot FPS test on ESP32
+ * TinyGL benchmark + 3D demo on the Xiaomiao ESP32 handheld.
  *
- * Uses embedded teapot vertex data (classic Utah teapot, ~2256 triangles).
- * Renders rotating teapot with flat shading, measures FPS.
+ * Renders a rotating textured cube (or N cubes, or a physics-driven scene)
+ * to the ST7735 via TinyGL's 16-bit RGB565 rasterizer. Features:
+ *   - 4 compile-time textures (ceramic/checker/brick/grid), multi-bind
+ *   - Directional light + material (Gouraud shading)
+ *   - Gravity + ground/wall collision physics
+ *   - 6-face skybox (rotation-only, depth-write off)
+ *   - Backface culling + depth test
+ *
+ * The debug console (components/debug_console) exposes live REPL commands
+ * to probe framebuffer/texture pixels, pause/resume, set cube count, etc.
  */
 
 #include "GL/gl.h"
 #include "zbuffer.h"
 #include "zfeatures.h"
+#include "zgl.h"            /* gl_get_context for diag */
 
 #include "display_backend.h"
 #include "hw_board.h"
+
+#include "texture_ceramic.h"   /* compile-time generated, in build dir */
+#include "texture_checker.h"
+#include "texture_brick.h"
+#include "texture_grid.h"
+#include "tinygl_physics.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -22,128 +37,158 @@
 
 static const char *TAG = "tinygl";
 
+/* Pause flag for the debug console: when non-zero, the render loop skips
+ * rendering+flush so debug commands can write the framebuffer and flush
+ * without being clobbered. */
+volatile int tinygl_render_paused = 0;
+
+/* Log enable flag: when 0, the benchmark loop suppresses its 5s ESP_LOG
+ * FPS report (so it doesn't pollute serial captures like `shot`). */
+volatile int tinygl_log_enabled = 1;
+
+/* Latest FPS measurement (updated every 5s by the render loop). */
+volatile float tinygl_last_fps = 0.0f;
+
+/* Physics mode: when non-zero, cubes are driven by the physics engine
+ * (gravity + ground collision) instead of the static grid layout. */
+volatile int tinygl_physics_mode = 0;
+
+/* Cube count — adjustable via debug console for stress testing. */
+volatile int tinygl_cube_count = 1;
+
 /* Display backend — initialized in tinygl_benchmark */
 static const display_backend_t *s_display = NULL;
 
-/* ── Framebuffer + Zbuffer in PSRAM ──────────────────── */
-static GLuint *s_fb   = NULL;
+/* ── Framebuffer + Zbuffer ───────────────────────────── */
 static ZBuffer *s_zb  = NULL;
 static int s_width  = 160;
 static int s_height = 128;
 
-/* ── Embedded Utah Teapot ───────────────────────────────
- * Teapot is built programmatically from geometric primitives
- * (sphere body + lid + spout cylinder + handle). */
+/* Texture name → texture IDs (must match glBindTexture calls in draw_*). */
+#define TEX_CERAMIC 1
+#define TEX_CHECKER 2
+#define TEX_BRICK   3
+#define TEX_GRID    4
 
-static void draw_teapot(void)
+/* ── Spawn a falling cube into the physics engine (called by debug console). */
+int tinygl_spawn_cube(void)
 {
-    /* Draw body (squashed sphere) */
+    static int idx = 0;
+    float xs[] = {-2.0f, 0.0f, 2.0f, -1.0f, 1.0f};
+    float x = xs[idx % 5];
+    idx++;
+    return physics_spawn(x, 4.0f, 0.0f, 0.8f);
+}
+
+/* ── Diagnose: print first pixels of framebuffer + zbuf[0] ──────────── */
+static void diag_fb(const char *label)
+{
+    GLContext *c = gl_get_context();
+    if (!c || !c->zb || !c->zb->pbuf) return;
+    int y = c->zb->ysize / 2;
+    uint16_t *fb = (uint16_t *)c->zb->pbuf;
+    ESP_LOGI("diag", "%s: fb[0..7]=%04x %04x %04x %04x %04x %04x %04x %04x  zbuf[0]=%d",
+             label,
+             fb[y*160+0], fb[y*160+1], fb[y*160+2], fb[y*160+3],
+             fb[y*160+4], fb[y*160+5], fb[y*160+6], fb[y*160+7],
+             c->zb->zbuf[0]);
+}
+
+/* ── Render a single textured cube ────────────────────── */
+static void draw_textured_cube(float x, float y, float z, float size,
+                               float rx, float ry, GLuint tex_id)
+{
+    float s = size * 0.5f;
     glPushMatrix();
-    glScalef(1.0f, 0.7f, 1.0f);
+    glTranslatef(x, y, z);
+    glRotatef(rx, 1, 0, 0);
+    glRotatef(ry, 0, 1, 0);
+    glBindTexture(GL_TEXTURE_2D, tex_id);
+    glColor3f(1.0f, 1.0f, 1.0f);
 
-    /* Render a sphere as the teapot body — latitude/longitude strips */
-    int slices = 16;
-    int stacks = 8;
-    for (int i = 0; i < stacks; i++) {
-        float lat0 = (float)i / stacks * 3.14159f - 1.5708f;
-        float lat1 = (float)(i + 1) / stacks * 3.14159f - 1.5708f;
-        float y0 = sinf(lat0);
-        float y1 = sinf(lat1);
-        float r0 = cosf(lat0);
-        float r1 = cosf(lat1);
-
-        glBegin(GL_TRIANGLE_STRIP);
-        for (int j = 0; j <= slices; j++) {
-            float lng = (float)j / slices * 2.0f * 3.14159f;
-            float x = cosf(lng);
-            float z = sinf(lng);
-            float s = (float)j / slices;
-            float t0 = (float)i / stacks;
-            float t1 = (float)(i + 1) / stacks;
-
-            glTexCoord2f(s, t0);
-            glNormal3f(x * r0, y0, z * r0);
-            glVertex3f(x * r0 * 1.5f, y0 * 1.5f, z * r0 * 1.5f);
-
-            glTexCoord2f(s, t1);
-            glNormal3f(x * r1, y1, z * r1);
-            glVertex3f(x * r1 * 1.5f, y1 * 1.5f, z * r1 * 1.5f);
-        }
-        glEnd();
-    }
+    glBegin(GL_QUADS);
+    /* Front  (+Z) */ glNormal3f(0,0,1);  glTexCoord2f(0,0); glVertex3f(-s,-s, s);
+                     glNormal3f(0,0,1);  glTexCoord2f(1,0); glVertex3f( s,-s, s);
+                     glNormal3f(0,0,1);  glTexCoord2f(1,1); glVertex3f( s, s, s);
+                     glNormal3f(0,0,1);  glTexCoord2f(0,1); glVertex3f(-s, s, s);
+    /* Back   (-Z) */ glNormal3f(0,0,-1); glTexCoord2f(0,0); glVertex3f( s,-s,-s);
+                     glNormal3f(0,0,-1); glTexCoord2f(1,0); glVertex3f(-s,-s,-s);
+                     glNormal3f(0,0,-1); glTexCoord2f(1,1); glVertex3f(-s, s,-s);
+                     glNormal3f(0,0,-1); glTexCoord2f(0,1); glVertex3f( s, s,-s);
+    /* Top    (+Y) */ glNormal3f(0,1,0);  glTexCoord2f(0,0); glVertex3f(-s, s, s);
+                     glNormal3f(0,1,0);  glTexCoord2f(1,0); glVertex3f( s, s, s);
+                     glNormal3f(0,1,0);  glTexCoord2f(1,1); glVertex3f( s, s,-s);
+                     glNormal3f(0,1,0);  glTexCoord2f(0,1); glVertex3f(-s, s,-s);
+    /* Bottom (-Y) */ glNormal3f(0,-1,0); glTexCoord2f(0,0); glVertex3f(-s,-s,-s);
+                     glNormal3f(0,-1,0); glTexCoord2f(1,0); glVertex3f( s,-s,-s);
+                     glNormal3f(0,-1,0); glTexCoord2f(1,1); glVertex3f( s,-s, s);
+                     glNormal3f(0,-1,0); glTexCoord2f(0,1); glVertex3f(-s,-s, s);
+    /* Right  (+X) */ glNormal3f(1,0,0);  glTexCoord2f(0,0); glVertex3f( s,-s, s);
+                     glNormal3f(1,0,0);  glTexCoord2f(1,0); glVertex3f( s,-s,-s);
+                     glNormal3f(1,0,0);  glTexCoord2f(1,1); glVertex3f( s, s,-s);
+                     glNormal3f(1,0,0);  glTexCoord2f(0,1); glVertex3f( s, s, s);
+    /* Left   (-X) */ glNormal3f(-1,0,0); glTexCoord2f(0,0); glVertex3f(-s,-s,-s);
+                     glNormal3f(-1,0,0); glTexCoord2f(1,0); glVertex3f(-s,-s, s);
+                     glNormal3f(-1,0,0); glTexCoord2f(1,1); glVertex3f(-s, s, s);
+                     glNormal3f(-1,0,0); glTexCoord2f(0,1); glVertex3f(-s, s,-s);
+    glEnd();
     glPopMatrix();
+}
 
-    /* Draw lid (smaller sphere on top) */
-    glPushMatrix();
-    glTranslatef(0.0f, 0.9f, 0.0f);
-    glScalef(0.6f, 0.25f, 0.6f);
-    glColor3f(0.9f, 0.3f, 0.3f);
-    for (int i = 0; i < 4; i++) {
-        float lat0 = (float)i / 4 * 3.14159f - 1.5708f;
-        float lat1 = (float)(i + 1) / 4 * 3.14159f - 1.5708f;
-        float y0 = sinf(lat0);
-        float y1 = sinf(lat1);
-        float r0 = cosf(lat0);
-        float r1 = cosf(lat1);
+/* ── Skybox: large cube viewed from inside, 6 textured faces ──────────
+ * Drawn first with depth-write off so scene geometry draws over it. */
+static int tinygl_skybox_enabled = 1;
+static void draw_skybox(void)
+{
+    if (!tinygl_skybox_enabled) return;
+    float s = 15.0f;
+    glDepthMask(GL_FALSE);
+    glDisable(GL_LIGHTING);
+    glDisable(GL_CULL_FACE);      /* render all 6 inner faces */
 
-        glBegin(GL_TRIANGLE_STRIP);
-        for (int j = 0; j <= slices; j++) {
-            float lng = (float)j / slices * 2.0f * 3.14159f;
-            float x = cosf(lng), z = sinf(lng);
-            glNormal3f(x * r0, y0, z * r0);
-            glVertex3f(x * r0 * 1.5f, y0 * 1.5f, z * r0 * 1.5f);
-            glNormal3f(x * r1, y1, z * r1);
-            glVertex3f(x * r1 * 1.5f, y1 * 1.5f, z * r1 * 1.5f);
-        }
-        glEnd();
-    }
-    glPopMatrix();
+    glBegin(GL_QUADS);
+    /* +X */ glBindTexture(GL_TEXTURE_2D, TEX_CHECKER);
+        glTexCoord2f(0,0); glVertex3f( s,-s,-s);
+        glTexCoord2f(1,0); glVertex3f( s,-s, s);
+        glTexCoord2f(1,1); glVertex3f( s, s, s);
+        glTexCoord2f(0,1); glVertex3f( s, s,-s);
+    /* -X */ glBindTexture(GL_TEXTURE_2D, TEX_BRICK);
+        glTexCoord2f(0,0); glVertex3f(-s,-s, s);
+        glTexCoord2f(1,0); glVertex3f(-s,-s,-s);
+        glTexCoord2f(1,1); glVertex3f(-s, s,-s);
+        glTexCoord2f(0,1); glVertex3f(-s, s, s);
+    /* +Y */ glBindTexture(GL_TEXTURE_2D, TEX_GRID);
+        glTexCoord2f(0,0); glVertex3f(-s, s, s);
+        glTexCoord2f(1,0); glVertex3f( s, s, s);
+        glTexCoord2f(1,1); glVertex3f( s, s,-s);
+        glTexCoord2f(0,1); glVertex3f(-s, s,-s);
+    /* -Y */ glBindTexture(GL_TEXTURE_2D, TEX_CERAMIC);
+        glTexCoord2f(0,0); glVertex3f(-s,-s,-s);
+        glTexCoord2f(1,0); glVertex3f( s,-s,-s);
+        glTexCoord2f(1,1); glVertex3f( s,-s, s);
+        glTexCoord2f(0,1); glVertex3f(-s,-s, s);
+    /* +Z */ glBindTexture(GL_TEXTURE_2D, TEX_GRID);
+        glTexCoord2f(0,0); glVertex3f(-s,-s, s);
+        glTexCoord2f(1,0); glVertex3f( s,-s, s);
+        glTexCoord2f(1,1); glVertex3f( s, s, s);
+        glTexCoord2f(0,1); glVertex3f(-s, s, s);
+    /* -Z */ glBindTexture(GL_TEXTURE_2D, TEX_BRICK);
+        glTexCoord2f(0,0); glVertex3f( s,-s,-s);
+        glTexCoord2f(1,0); glVertex3f(-s,-s,-s);
+        glTexCoord2f(1,1); glVertex3f(-s, s,-s);
+        glTexCoord2f(0,1); glVertex3f( s, s,-s);
+    glEnd();
 
-    /* Draw spout (cylinder pointing forward) */
-    glPushMatrix();
-    glTranslatef(0.0f, 0.3f, 1.2f);
-    glRotatef(90.0f, 1.0f, 0.0f, 0.0f);
-    glColor3f(0.7f, 0.2f, 0.2f);
-    for (int i = 0; i < 4; i++) {
-        float z0 = -0.8f + (float)i / 4 * 1.6f;
-        float z1 = -0.8f + (float)(i + 1) / 4 * 1.6f;
-        glBegin(GL_TRIANGLE_STRIP);
-        for (int j = 0; j <= 8; j++) {
-            float a = (float)j / 8 * 2.0f * 3.14159f;
-            float r = 0.15f;
-            float x = cosf(a) * r, y = sinf(a) * r;
-            glNormal3f(x, y, 0);
-            glVertex3f(x, y, z0);
-            glNormal3f(x, y, 0);
-            glVertex3f(x, y, z1);
-        }
-        glEnd();
-    }
-    glPopMatrix();
+    /* restore state for scene geometry */
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_LIGHTING);
+    glDepthMask(GL_TRUE);
+}
 
-    /* Draw handle (curved cylinder on right side) */
-    glPushMatrix();
-    glTranslatef(1.5f, 0.5f, 0.0f);
-    glRotatef(-30.0f, 0.0f, 0.0f, 1.0f);
-    glColor3f(0.7f, 0.2f, 0.2f);
-    for (int i = 0; i < 8; i++) {
-        float a0 = (float)i / 8 * 3.14159f;
-        float a1 = (float)(i + 1) / 8 * 3.14159f;
-        float x0 = cosf(a0) * 0.8f, y0 = sinf(a0) * 0.8f;
-        float x1 = cosf(a1) * 0.8f, y1 = sinf(a1) * 0.8f;
-        glBegin(GL_TRIANGLE_STRIP);
-        for (int j = 0; j <= 6; j++) {
-            float b = (float)j / 6 * 2.0f * 3.14159f;
-            float r = 0.12f;
-            float cx = cosf(b) * r, cy = sinf(b) * r;
-            glNormal3f(cx, cy, 0);
-            glVertex3f(x0 + cx, y0 + cy, 0);
-            glNormal3f(cx, cy, 0);
-            glVertex3f(x1 + cx, y1 + cy, 0);
-        }
-        glEnd();
-    }
-    glPopMatrix();
+/* ── Copy TinyGL framebuffer to display ────────────────── */
+static void gl_flush_to_display(void)
+{
+    s_display->flush();
 }
 
 /* ── TinyGL init ─────────────────────────────────────── */
@@ -152,19 +197,22 @@ static int gl_init(int w, int h)
     s_width  = w;
     s_height = h;
 
-    /* 16-bit RGB565 mode: TinyGL renders directly to display backend buffer.
-     * ZB_MODE_5R6G5B matches ST7735 native format, zero-copy. */
     s_zb = ZB_open(w, h, ZB_MODE_5R6G5B, s_display->get_buffer());
     if (!s_zb) { ESP_LOGE(TAG, "ZB_open failed"); return -1; }
 
     glInit(s_zb);
     glEnable(GL_DEPTH_TEST);
 
+    /* Backface culling — all cube faces use CCW winding with outward normals. */
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);
+
     glViewport(0, 0, w, h);
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
     float aspect = (float)w / (float)h;
-    glFrustum(-aspect, aspect, -1.0f, 1.0f, 0.5f, 20.0f);
+    glFrustum(-aspect, aspect, -1.0f, 1.0f, 1.0f, 30.0f);
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
@@ -172,105 +220,90 @@ static int gl_init(int w, int h)
     glClearColor(0.1f, 0.1f, 0.2f, 0);
     glShadeModel(GL_SMOOTH);
 
-    /* Turn on ST7735 display */
+    /* ── Lighting ── one directional light + ambient. */
+    glEnable(GL_LIGHTING);
+    glEnable(GL_LIGHT0);
+    GLfloat ambient[]  = { 0.2f, 0.2f, 0.2f, 1.0f };
+    GLfloat diffuse[]  = { 0.9f, 0.9f, 0.85f, 1.0f };
+    GLfloat light_pos[] = { 5.0f, 8.0f, 5.0f, 0.0f };  /* w=0 → directional */
+    glLightfv(GL_LIGHT0, GL_AMBIENT,  ambient);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE,  diffuse);
+    glLightfv(GL_LIGHT0, GL_POSITION, light_pos);
+    GLfloat mat_amb[] = { 0.3f, 0.3f, 0.3f, 1.0f };
+    GLfloat mat_dif[] = { 0.8f, 0.8f, 0.8f, 1.0f };
+    glMaterialfv(GL_FRONT, GL_AMBIENT, mat_amb);
+    glMaterialfv(GL_FRONT, GL_DIFFUSE, mat_dif);
+    ESP_LOGI(TAG, "Lighting enabled (LIGHT0 directional + ambient)");
 
-    /* Create a 256x256 checkerboard texture for testing.
-     * TinyGL requires: GL_TEXTURE_2D, level=0, components=3, border=0,
-     * format=GL_RGB, type=GL_UNSIGNED_BYTE, width=height=256.
-     * Allocate in PSRAM to avoid DRAM overflow (256*256*3 = 192KB). */
+    /* ── Textures ── 4 compile-time textures uploaded to flash-backed IDs. */
     {
-        GLubyte *tex = (GLubyte *)heap_caps_malloc(256 * 256 * 3, MALLOC_CAP_SPIRAM);
-        if (!tex) {
-            ESP_LOGE(TAG, "Texture alloc failed");
-        } else {
-            for (int y = 0; y < 256; y++) {
-                for (int x = 0; x < 256; x++) {
-                    GLubyte *p = &tex[(y * 256 + x) * 3];
-                    /* Ceramic teapot: warm beige with gradient + speckles + highlight */
-                    int br = 210 + (y * 30 / 256);
-                    int bg = 180 + (y * 35 / 256);
-                    int bb = 140 + (y * 40 / 256);
-                    int n = ((x * 17 + y * 31) & 15) - 8;
-                    p[0] = br + n > 255 ? 255 : (br + n < 0 ? 0 : br + n);
-                    p[1] = bg + n > 255 ? 255 : (bg + n < 0 ? 0 : bg + n);
-                    p[2] = bb + n > 255 ? 255 : (bb + n < 0 ? 0 : bb + n);
-                    if (y < 32) { p[0]=p[0]*7/10; p[1]=p[1]*7/10; p[2]=p[2]*7/10; }
-                    if (y > 100 && y < 120) { p[0]+=20; p[1]+=15; p[2]+=10; }
-                }
-            }
-            glBindTexture(GL_TEXTURE_2D, 1);
+        struct { GLuint id; const GLvoid *data; const char *name; } texs[] = {
+            { TEX_CERAMIC, texture_ceramic_data, "ceramic" },
+            { TEX_CHECKER, texture_checker_data, "checker" },
+            { TEX_BRICK,   texture_brick_data,   "brick"   },
+            { TEX_GRID,    texture_grid_data,    "grid"    },
+        };
+        for (int i = 0; i < 4; i++) {
+            glBindTexture(GL_TEXTURE_2D, texs[i].id);
             glTexImage2D(GL_TEXTURE_2D, 0, 3, 256, 256, 0,
-                         GL_RGB, GL_UNSIGNED_BYTE, tex);
-            ESP_LOGI(TAG, "Texture uploaded: 256x256 RGB565");
-            glEnable(GL_TEXTURE_2D);
-            ESP_LOGI(TAG, "GL_TEXTURE_2D enabled");
-            free(tex);
+                         GL_RGB, GL_UNSIGNED_BYTE, texs[i].data);
+            ESP_LOGI(TAG, "Texture %d uploaded: %s", texs[i].id, texs[i].name);
         }
+        glEnable(GL_TEXTURE_2D);
+        ESP_LOGI(TAG, "GL_TEXTURE_2D enabled (4 textures bound)");
     }
 
+    diag_fb("after_init");
     ESP_LOGI(TAG, "TinyGL initialized: %dx%d", w, h);
     return 0;
-}
-
-/* ── Copy TinyGL framebuffer to display ──────────────────
- * 16-bit mode: TinyGL renders directly to display backend buffer.
- * Just flush. */
-static void gl_flush_to_display(void)
-{
-    s_display->flush();
 }
 
 /* ── Render a single frame ───────────────────────────── */
 static void render_frame(float angle_y)
 {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    /* ── Skybox ── centered on camera (rotation only, no translation). */
     glLoadIdentity();
-    glTranslatef(0, 0, -2.5f);
-    glRotatef(30, 1, 0, 0);
+    glRotatef(25, 1, 0, 0);
+    glRotatef(angle_y, 0, 1, 0);
+    draw_skybox();
+
+    /* ── Scene ── translate camera back, then rotate. */
+    glLoadIdentity();
+    glTranslatef(0, 0, -3.5f);
+    glRotatef(25, 1, 0, 0);
     glRotatef(angle_y, 0, 1, 0);
 
-    /* Simple textured cube — 6 faces with explicit texture coords */
-    float s = 1.0f;  /* half-size */
+    int n = tinygl_cube_count;
+    if (n < 1) n = 1;
+    static const GLuint cube_tex[4] = { TEX_CERAMIC, TEX_CHECKER, TEX_BRICK, TEX_GRID };
 
-    glBegin(GL_QUADS);
-
-    /* Front face (z = +s) */
-    glTexCoord2f(0, 0); glVertex3f(-s, -s,  s);
-    glTexCoord2f(1, 0); glVertex3f( s, -s,  s);
-    glTexCoord2f(1, 1); glVertex3f( s,  s,  s);
-    glTexCoord2f(0, 1); glVertex3f(-s,  s,  s);
-
-    /* Back face (z = -s) */
-    glTexCoord2f(0, 0); glVertex3f( s, -s, -s);
-    glTexCoord2f(1, 0); glVertex3f(-s, -s, -s);
-    glTexCoord2f(1, 1); glVertex3f(-s,  s, -s);
-    glTexCoord2f(0, 1); glVertex3f( s,  s, -s);
-
-    /* Top face (y = +s) */
-    glTexCoord2f(0, 0); glVertex3f(-s,  s, -s);
-    glTexCoord2f(1, 0); glVertex3f( s,  s, -s);
-    glTexCoord2f(1, 1); glVertex3f( s,  s,  s);
-    glTexCoord2f(0, 1); glVertex3f(-s,  s,  s);
-
-    /* Bottom face (y = -s) */
-    glTexCoord2f(0, 0); glVertex3f(-s, -s,  s);
-    glTexCoord2f(1, 0); glVertex3f( s, -s,  s);
-    glTexCoord2f(1, 1); glVertex3f( s, -s, -s);
-    glTexCoord2f(0, 1); glVertex3f(-s, -s, -s);
-
-    /* Right face (x = +s) */
-    glTexCoord2f(0, 0); glVertex3f( s, -s,  s);
-    glTexCoord2f(1, 0); glVertex3f( s, -s, -s);
-    glTexCoord2f(1, 1); glVertex3f( s,  s, -s);
-    glTexCoord2f(0, 1); glVertex3f( s,  s,  s);
-
-    /* Left face (x = -s) */
-    glTexCoord2f(0, 0); glVertex3f(-s, -s, -s);
-    glTexCoord2f(1, 0); glVertex3f(-s, -s,  s);
-    glTexCoord2f(1, 1); glVertex3f(-s,  s,  s);
-    glTexCoord2f(0, 1); glVertex3f(-s,  s, -s);
-
-    glEnd();
+    if (tinygl_physics_mode) {
+        physics_step(1.0f / 60.0f);
+        int drawn = 0;
+        for (int i = 0; i < MAX_BODIES && drawn < n; i++) {
+            body_t *b = physics_get(i);
+            if (!b || !b->active) continue;
+            draw_textured_cube(b->x, b->y, b->z, b->hs * 2.0f,
+                               0.0f, 0.0f, cube_tex[drawn % 4]);
+            drawn++;
+        }
+    } else {
+        int per_row = 1;
+        while (per_row * per_row < n) per_row++;
+        for (int i = 0; i < n; i++) {
+            int row = i / per_row;
+            int col = i % per_row;
+            float spacing = 2.5f;
+            float ox = (col - (per_row - 1) * 0.5f) * spacing;
+            float oy = (row - (per_row - 1) * 0.5f) * spacing;
+            draw_textured_cube(ox, oy, 0.0f, 1.6f,
+                               angle_y * (0.5f + i * 0.07f),
+                               angle_y * (0.7f + i * 0.11f),
+                               cube_tex[i % 4]);
+        }
+    }
 
     gl_flush_to_display();
 }
@@ -280,7 +313,6 @@ void *tinygl_benchmark(void *arg)
 {
     (void)arg;
 
-    /* Use the ST7735 display backend */
     extern const display_backend_t st7735_display_backend;
     s_display = &st7735_display_backend;
     s_display->init(160, 128, PIXEL_FORMAT_RGB565_SWAP);
@@ -290,35 +322,41 @@ void *tinygl_benchmark(void *arg)
         return NULL;
     }
 
+    physics_init();
+
     int frame_count = 0;
     float angle_y = 0;
     int64_t start_us = esp_timer_get_time();
 
-    ESP_LOGI(TAG, "Teapot benchmark started — 5 second run");
+    ESP_LOGI(TAG, "TinyGL benchmark started");
 
     int64_t frame_start_us = 0;
     while (true) {
         frame_start_us = esp_timer_get_time();
 
-        render_frame(angle_y);
-        frame_count++;
-        angle_y += 2.0f;
+        if (!tinygl_render_paused) {
+            render_frame(angle_y);
+            frame_count++;
+            angle_y += 2.0f;
+        }
 
-        /* Frame rate limit: target ~60 FPS (16667 us/frame) to reduce
-         * tearing on ST7735 (TE pin not connected, no vsync possible).
-         * Wait until 16ms has elapsed since frame start. */
         int64_t frame_elapsed = esp_timer_get_time() - frame_start_us;
         if (frame_elapsed < 16667) {
             vTaskDelay(pdMS_TO_TICKS((16667 - frame_elapsed) / 1000));
+        } else {
+            vTaskDelay(1);
         }
 
         int64_t elapsed_us = esp_timer_get_time() - start_us;
         if (elapsed_us >= 5000000) {
             float fps = (float)frame_count / ((float)elapsed_us / 1000000.0f);
-            ESP_LOGI(TAG, "=== BENCHMARK RESULT ===");
-            ESP_LOGI(TAG, "Frames: %d in %.2f sec = %.1f FPS",
-                     frame_count, (float)elapsed_us / 1000000.0f, fps);
-            ESP_LOGI(TAG, "=========================");
+            tinygl_last_fps = fps;
+            if (tinygl_log_enabled) {
+                ESP_LOGI(TAG, "=== BENCHMARK RESULT ===");
+                ESP_LOGI(TAG, "Frames: %d in %.2f sec = %.1f FPS",
+                         frame_count, (float)elapsed_us / 1000000.0f, fps);
+                ESP_LOGI(TAG, "=========================");
+            }
             frame_count = 0;
             start_us = esp_timer_get_time();
         }

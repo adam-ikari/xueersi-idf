@@ -3,6 +3,7 @@ idf_component_register(SRCS "main.c"
                                      "input_api.c"
                                      "audio_api.c"
                                      "tinygl_test.c"
+                                     "tinygl_physics.c"
                                      "display_st7735.c"
                        PRIV_REQUIRES esp_lcd
                                      esp_timer
@@ -23,6 +24,7 @@ idf_component_register(SRCS "main.c"
                                      georgik__sdl_bsp
                                      wasm-micro-runtime
                                      tinygl
+                                     debug_console
                        INCLUDE_DIRS ""
                        PRIV_INCLUDE_DIRS ${CMAKE_CURRENT_BINARY_DIR})
 
@@ -45,3 +47,24 @@ add_custom_command(
 )
 add_custom_target(gen_wasm_header DEPENDS ${WASM_HEADER})
 add_dependencies(${COMPONENT_LIB} gen_wasm_header)
+
+# Generate texture headers at compile time (tools/gen_texture.py).
+# Each texture is a 256x256 RGB array embedded in flash (.rodata) and uploaded
+# via glTexImage2D. Multiple textures enable multi-texture demos.
+set(GEN_TEX ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gen_texture.py)
+set(TEX_DIR ${CMAKE_CURRENT_BINARY_DIR})
+
+set(TEXTURES ceramic checker brick grid)
+set(TEX_HEADERS "")
+foreach(kind ${TEXTURES})
+    set(hdr ${TEX_DIR}/texture_${kind}.h)
+    list(APPEND TEX_HEADERS ${hdr})
+    add_custom_command(
+        OUTPUT ${hdr}
+        COMMAND python3 ${GEN_TEX} ${kind} ${hdr} texture_${kind} 256 256
+        DEPENDS ${GEN_TEX}
+        VERBATIM
+    )
+endforeach()
+add_custom_target(gen_texture_headers DEPENDS ${TEX_HEADERS})
+add_dependencies(${COMPONENT_LIB} gen_texture_headers)

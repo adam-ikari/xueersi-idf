@@ -52,6 +52,8 @@
 
 #include "tinygl_test.h"
 
+#include "debug_console.h"
+
 #include <pthread.h>
 
 #ifndef CONFIG_IDF_TARGET
@@ -1400,6 +1402,11 @@ void app_main(void)
 
     /* Hardware init (SPI2, I2C0, ADC, buzzer, ext-IO, display, buttons) */
     hw_board_init();
+
+    /* adb-like serial debug console (REPL on UART0, independent task).
+     * Spawned before the blocking benchmark join so the prompt is available
+     * while the 3D render loop runs; GL state is NULL until glInit. */
+    debug_console_start();
 
     /* TinyGL benchmark — replace WAMR Canvas test for GPU performance check */
     {
