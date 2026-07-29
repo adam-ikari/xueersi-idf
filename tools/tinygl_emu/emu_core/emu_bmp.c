@@ -67,8 +67,8 @@ int bmp_save_rgb565(const uint16_t* fb, int w, int h, const char* path) {
         .colors_important = 0,
     };
 
-    fwrite(&fh, sizeof(fh), 1, f);
-    fwrite(&ih, sizeof(ih), 1, f);
+    if (fwrite(&fh, sizeof(fh), 1, f) != 1) goto fail;
+    if (fwrite(&ih, sizeof(ih), 1, f) != 1) goto fail;
 
     uint8_t* row = (uint8_t*)malloc(row_size);
     if (!row) { fclose(f); return -1; }
@@ -85,12 +85,17 @@ int bmp_save_rgb565(const uint16_t* fb, int w, int h, const char* path) {
             row[x * 3 + 1] = g;
             row[x * 3 + 2] = r;
         }
-        fwrite(row, row_size, 1, f);
+        if (fwrite(row, row_size, 1, f) != 1) goto fail;
     }
 
     free(row);
     fclose(f);
     return 0;
+
+fail:
+    free(row);
+    fclose(f);
+    return -1;
 }
 
 /* 16-bit RGB565 raw BMP (BI_BITFIELDS) */
@@ -125,9 +130,9 @@ int bmp_save_rgb565_raw(const uint16_t* fb, int w, int h, const char* path) {
 
     uint32_t masks[3] = {0xF800, 0x07E0, 0x001F};  /* R, G, B masks */
 
-    fwrite(&fh, sizeof(fh), 1, f);
-    fwrite(&ih, sizeof(ih), 1, f);
-    fwrite(masks, sizeof(masks), 1, f);
+    if (fwrite(&fh, sizeof(fh), 1, f) != 1) goto fail_raw;
+    if (fwrite(&ih, sizeof(ih), 1, f) != 1) goto fail_raw;
+    if (fwrite(masks, sizeof(masks), 1, f) != 1) goto fail_raw;
 
     uint8_t* row = (uint8_t*)malloc(row_size);
     if (!row) { fclose(f); return -1; }
@@ -141,10 +146,15 @@ int bmp_save_rgb565_raw(const uint16_t* fb, int w, int h, const char* path) {
             row[x * 2] = row[x * 2 + 1];
             row[x * 2 + 1] = tmp;
         }
-        fwrite(row, row_size, 1, f);
+        if (fwrite(row, row_size, 1, f) != 1) goto fail_raw;
     }
 
     free(row);
     fclose(f);
     return 0;
+
+fail_raw:
+    free(row);
+    fclose(f);
+    return -1;
 }
