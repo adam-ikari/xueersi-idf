@@ -331,35 +331,6 @@ static GLuint dither_callback(GLint x, GLint y, GLuint pixel, GLushort z)
  * color banding (visible as "shadow steps" in Gouraud lighting). */
 static void gl_flush_to_display(void)
 {
-    GLContext *c = gl_get_context();
-    if (c && c->zb && c->zb->pbuf) {
-        /* 2×2 ordered dither — gentler than 4×4 Bayer for 160×128 screen */
-        static const int8_t d2[4] = { 0, -3, -2, 3 };
-        int w = c->zb->xsize, h = c->zb->ysize;
-        for (int y = 0; y < h; y++) {
-            int dy = y & 1;
-            for (int x = 0; x < w; x++) {
-                int idx = y * w + x;
-                uint16_t px = (uint16_t)c->zb->pbuf[idx];
-#if TGL_PIXEL_BYTE_SWAP
-                px = (uint16_t)((px << 8) | (px >> 8));
-#endif
-                int r5 = (px >> 11) & 0x1f;
-                int g6 = (px >>  5) & 0x3f;
-                int b5 =  px        & 0x1f;
-                int d = d2[((dy) << 1) | (x & 1)];
-                /* dither within ±1 LSB of 5/6/5 channels */
-                r5 += (d > 0 && r5 < 31) ? 1 : ((d < 0 && r5 > 0) ? -1 : 0);
-                g6 += (d > 1 && g6 < 63) ? 1 : ((d < -1 && g6 > 0) ? -1 : 0);
-                b5 += (d > 0 && b5 < 31) ? 1 : ((d < 0 && b5 > 0) ? -1 : 0);
-                px = (uint16_t)((r5 << 11) | (g6 << 5) | b5);
-#if TGL_PIXEL_BYTE_SWAP
-                px = (uint16_t)((px << 8) | (px >> 8));
-#endif
-                c->zb->pbuf[idx] = (PIXEL)px;
-            }
-        }
-    }
     s_display->flush();
 }
 
