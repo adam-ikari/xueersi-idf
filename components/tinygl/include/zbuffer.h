@@ -111,12 +111,24 @@ typedef GLushort PIXEL;
 #endif
 
 #if TGL_FEATURE_LIT_TEXTURES == 1
+/* Un-swap tpix before extracting channels (GET_RED etc assume logical 565
+ * layout, but the stored value is byte-swapped when TGL_PIXEL_BYTE_SWAP=1).
+ * Without un-swap, the R/G/B masks hit the wrong bit fields, producing
+ * incorrect colors (e.g., green tint on ceramic beige). */
+#if TGL_PIXEL_BYTE_SWAP
+#define _TGL_UNSWAP16(p) ((PIXEL)(((p) << 8) | ((p) >> 8)))
+#else
+#define _TGL_UNSWAP16(p) (p)
+#endif
 #define RGB_MIX_FUNC(rr, gg, bb, tpix) \
-	RGB_TO_PIXEL( \
-		((rr * GET_RED(tpix))>>8),\
-		((gg * GET_GREEN(tpix))>>8),\
-		((bb * GET_BLUE(tpix))>>8)\
-	)
+	({ \
+		PIXEL _u = _TGL_UNSWAP16(tpix); \
+		RGB_TO_PIXEL( \
+			((rr * GET_RED(_u))>>8),\
+			((gg * GET_GREEN(_u))>>8),\
+			((bb * GET_BLUE(_u))>>8)\
+		); \
+	})
 #else
 #define RGB_MIX_FUNC(rr, gg, bb, tpix)(tpix)
 #endif

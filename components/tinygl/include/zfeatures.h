@@ -31,7 +31,7 @@ And because some systems may have float types which are incompatible with it.
 
 #define TGL_FEATURE_DISPLAYLISTS   1
 
-#define TGL_FEATURE_LIT_TEXTURES   0
+#define TGL_FEATURE_LIT_TEXTURES   1
 /* Disabled — RGB_MIX_FUNC precision loss causes R/B attenuation on 16-bit targets.
  * With white vertex color (glColor 1,1,1) the texture renders at full intensity. */
 
