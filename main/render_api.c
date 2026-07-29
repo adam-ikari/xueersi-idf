@@ -76,28 +76,23 @@ static void wasm_physics_body_pos(wasm_exec_env_t env,
 
 /* ── registration ───────────────────────────────────────────────────────── */
 
-#define REG_WASM(name, func, sig) do {                                  \
-    NativeSymbol ns = {                                                 \
-        .symbol = name,                                                 \
-        .func_ptr = (void *)func,                                       \
-        .signature = sig,                                               \
-        .attachment = NULL,                                             \
-    };                                                                  \
-    if (!wasm_runtime_register_natives("env", &ns, 1)) {                \
-        ESP_LOGE(TAG, "Failed to register %s", name);                   \
-        return false;                                                   \
-    }                                                                   \
-} while(0)
-
 bool render_api_register(void)
 {
-    REG_WASM("render_clear",          wasm_render_clear,          "(iii)");
-    REG_WASM("render_submit_cube",    wasm_render_submit_cube,    "(ffffffi)");
-    REG_WASM("physics_step",          wasm_physics_step,          "(f)");
-    REG_WASM("physics_spawn",         wasm_physics_spawn,         "(ffff)i");
-    REG_WASM("physics_body_count",    wasm_physics_body_count,    "()i");
-    REG_WASM("physics_body_pos",      wasm_physics_body_pos,      "(iiii)");
+    NativeSymbol ns[] = {
+        { .symbol = "render_clear",       .func_ptr = wasm_render_clear,       .signature = "(iii)",    .attachment = NULL },
+        { .symbol = "render_submit_cube", .func_ptr = wasm_render_submit_cube, .signature = "(ffffffi)", .attachment = NULL },
+        { .symbol = "physics_step",       .func_ptr = wasm_physics_step,       .signature = "(f)",      .attachment = NULL },
+        { .symbol = "physics_spawn",      .func_ptr = wasm_physics_spawn,      .signature = "(ffff)i",  .attachment = NULL },
+        { .symbol = "physics_body_count", .func_ptr = wasm_physics_body_count, .signature = "()i",      .attachment = NULL },
+        { .symbol = "physics_body_pos",   .func_ptr = wasm_physics_body_pos,   .signature = "(iiii)",   .attachment = NULL },
+    };
+    int n = sizeof(ns) / sizeof(ns[0]);
 
-    ESP_LOGI(TAG, "Render + physics Host API registered (6 functions)");
+    if (!wasm_runtime_register_natives("env", ns, n)) {
+        ESP_LOGE(TAG, "Failed to register native symbols");
+        return false;
+    }
+
+    ESP_LOGI(TAG, "Render + physics Host API registered (%d functions)", n);
     return true;
 }

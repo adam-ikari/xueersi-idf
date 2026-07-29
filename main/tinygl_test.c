@@ -33,6 +33,7 @@
 #ifdef TGL_WASM_GAME
 #include "wasm_export.h"
 #include "render_api.h"
+#include <pthread.h>
 #endif
 
 #ifndef TGL_EMU_BUILD
@@ -195,6 +196,91 @@ static void draw_reflective_cube(float cx, float cy, float cz, float size,
     glEnd();
     glPopMatrix();
 }
+
+/* ── WAMR wasm game task (runs in a pthread on core 0) ── */
+#ifdef TGL_WASM_GAME
+#include "wasm_game.wasm.h"
+
+static void *tinygl_wasm_task(void *arg)
+{
+    (void)arg;
+
+    RuntimeInitArgs init_args;
+    memset(&init_args, 0, sizeof(init_args));
+    init_args.mem_alloc_type = Alloc_With_Pool;
+    init_args.mem_alloc_option.pool.heap_buf = malloc(256 * 1024);
+    init_args.mem_alloc_option.pool.heap_size = 256 * 1024;
+
+    if (!wasm_runtime_full_init(&init_args)) {
+        ESP_LOGE(TAG, "WAMR init failed");
+        return NULL;
+    }
+    ESP_LOGI(TAG, "WAMR runtime initialized (pthread)");
+
+    if (!render_api_register()) {
+        ESP_LOGE(TAG, "Render API registration failed");
+        return NULL;
+    }
+
+    char error_buf[128];
+    wasm_module_t module = wasm_runtime_load(wasm_game_wasm, wasm_game_wasm_len,
+                                               error_buf, sizeof(error_buf));
+    if (!module) {
+        ESP_LOGE(TAG, "WASM load failed: %s", error_buf);
+        return NULL;
+    }
+    ESP_LOGI(TAG, "WASM game module loaded (%u bytes)", wasm_game_wasm_len);
+
+    wasm_module_inst_t inst = wasm_runtime_instantiate(module, 32768, 0,
+                                                        error_buf, sizeof(error_buf));
+    if (!inst) {
+        ESP_LOGE(TAG, "WASM instantiate failed: %s", error_buf);
+        return NULL;
+    }
+    ESP_LOGI(TAG, "WASM instance created");
+
+    /* Call game_init() once */
+    wasm_function_inst_t fn_init = wasm_runtime_lookup_function(inst, "game_init");
+    if (fn_init) {
+        wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 32768);
+        if (env) {
+            wasm_runtime_call_wasm(env, fn_init, 0, NULL);
+            wasm_runtime_destroy_exec_env(env);
+            ESP_LOGI(TAG, "game_init() done");
+        }
+    }
+
+    /* Game loop: call game_update() at ~30 Hz */
+    wasm_function_inst_t fn_update = wasm_runtime_lookup_function(inst, "game_update");
+    if (!fn_update) {
+        ESP_LOGE(TAG, "game_update() not found");
+        return NULL;
+    }
+    ESP_LOGI(TAG, "Entering WASM game loop");
+
+    /* Reuse a single exec env for the entire game loop — creating/destroying
+     * one per frame causes heap fragmentation and eventual crash on ESP32. */
+    wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 32768);
+    if (!env) {
+        ESP_LOGE(TAG, "Create exec env failed");
+        return NULL;
+    }
+
+    int64_t last_us = esp_timer_get_time();
+    while (1) {
+        wasm_runtime_call_wasm(env, fn_update, 0, NULL);
+
+        int64_t now_us = esp_timer_get_time();
+        int64_t elapsed_us = now_us - last_us;
+        last_us = now_us;
+        if (elapsed_us < 33333)
+            vTaskDelay(pdMS_TO_TICKS((33333 - elapsed_us) / 1000));
+        else
+            vTaskDelay(1);
+    }
+    return NULL;
+}
+#endif /* TGL_WASM_GAME */
 
 /* ── Render a single textured cube ────────────────────── */
 static void draw_textured_cube(float x, float y, float z, float size,
@@ -613,75 +699,20 @@ void *tinygl_benchmark(void *arg)
         1                           /* core 1 */
     );
 
-    /* Core 0: WAMR wasm game loop — calls game_update() at ~30 Hz.
-     * The wasm module submits draw commands via render_submit_cube() host
-     * function, which pushes to the render queue consumed by core 1. */
-    {
+    /* Core 0: idle — available for debug console, I2C, etc.
+     * When TGL_WASM_GAME is enabled, launch the WAMR wasm game loop
+     * in a pthread (required: WAMR interpreter needs pthread TLS). */
 #ifdef TGL_WASM_GAME
-        #include "wasm_hello.wasm.h"
-        /* TODO: switch to wasm_game.wasm.h once import linking is fixed */
-
-        RuntimeInitArgs init_args;
-        memset(&init_args, 0, sizeof(init_args));
-        init_args.mem_alloc_type = Alloc_With_System_Allocator;
-        /* init_args.mem_alloc_option handled by system allocator */
-
-        if (!wasm_runtime_full_init(&init_args)) {
-            ESP_LOGE(TAG, "WAMR init failed");
-            free(init_args.mem_alloc_option.pool.heap_buf);
-        } else {
-            ESP_LOGI(TAG, "WAMR runtime initialized on core 0");
-
-            if (render_api_register()) {
-                char error_buf[128];
-                wasm_module_t module = wasm_runtime_load(wasm_hello_wasm, wasm_hello_wasm_len,
-                                                           error_buf, sizeof(error_buf));
-                (void)render_api_register;  /* silence unused warning for hello test */
-                if (module) {
-                    ESP_LOGI(TAG, "WASM hello module loaded (%u bytes)", wasm_hello_wasm_len);
-                    ESP_LOGI(TAG, "About to instantiate...");
-                    vTaskDelay(pdMS_TO_TICKS(50));
-                    wasm_module_inst_t inst = wasm_runtime_instantiate(module, 32768, 0,
-                                                                        error_buf, sizeof(error_buf));
-                    if (inst) {
-                        ESP_LOGI(TAG, "WASM instance created");
-                        ESP_LOGI(TAG, "Looking up 'test'...");
-                        wasm_function_inst_t fn_test = wasm_runtime_lookup_function(inst, "test");
-                        ESP_LOGI(TAG, "lookup done: fn=%p", (void*)fn_test);
-                        if (fn_test) {
-                            ESP_LOGI(TAG, "Creating exec env...");
-                            wasm_exec_env_t env = wasm_runtime_create_exec_env(inst, 32768);
-                            ESP_LOGI(TAG, "exec env=%p", (void*)env);
-                            if (env) {
-                                ESP_LOGI(TAG, "Calling test()...");
-                                wasm_runtime_call_wasm(env, fn_test, 0, NULL);
-                                ESP_LOGI(TAG, "test() called OK");
-                                wasm_runtime_destroy_exec_env(env);
-                            }
-                        }
-                        /* Idle loop: push a stationary cube each frame */
-                        while (1) {
-                            render_queue_push((render_cmd_t){
-                                .x = 0, .y = 0, .z = 0, .size = 1.6f,
-                                .rx = 0, .ry = 0, .tex_id = 1,
-                            });
-                            vTaskDelay(pdMS_TO_TICKS(33));
-                        }
-                    } else {
-                        ESP_LOGE(TAG, "WASM instantiate failed: %s", error_buf);
-                    }
-                } else {
-                    ESP_LOGE(TAG, "WASM load failed: %s", error_buf);
-                }
-            }
-        }
-#else
-        /* Fallback: idle loop when WASM game is not compiled in */
-        while (1) {
-            vTaskDelay(pdMS_TO_TICKS(1000));
-        }
-#endif
+    {
+        pthread_t wasm_thread;
+        pthread_create(&wasm_thread, NULL, tinygl_wasm_task, NULL);
+        pthread_join(wasm_thread, NULL);
     }
+#else
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+#endif
 
     return NULL;
 }
