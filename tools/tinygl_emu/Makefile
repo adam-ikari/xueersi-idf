@@ -159,3 +159,7 @@ render-bmp: $(TARGET)
 	@mkdir -p bmp_out
 	./$(TARGET) --render-bmp bmp_out 10 1
 	@echo "BMP files saved to bmp_out/"
+
+# Batch render multiple scenes
+render-scenes: $(TARGET)
+	bash render_scenes.sh
