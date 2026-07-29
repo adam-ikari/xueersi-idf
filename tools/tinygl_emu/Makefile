@@ -80,7 +80,9 @@ SCENE_SRC = \
 # ── Emulator sources ─────────────────────────────────────────────
 EMU_SRC = \
     main_emu.c \
-    emu_core/emu_display.c
+    emu_core/emu_display.c \
+    emu_core/emu_headless.c \
+    emu_core/emu_bmp.c
 
 # ── Test sources ─────────────────────────────────────────────────
 TEST_SRC = \
@@ -107,7 +109,7 @@ TEST_OBJ  = $(patsubst %.c, $(BUILD_DIR)/%.o, $(notdir $(TEST_RUNNER_SRC)))
 # vpath tells make where to look for %.c when building from a flat obj name.
 vpath %.c $(sort $(dir $(ALL_SRC)))
 
-.PHONY: all clean test benchmark test-rasterizer test-runner
+.PHONY: all clean test benchmark test-rasterizer test-runner render-bmp
 
 all: $(TEX_HEADERS) $(TARGET)
 
@@ -151,3 +153,9 @@ benchmark: $(TARGET)
 	@echo "=== Running interactive benchmark ==="
 	@echo "Press Ctrl+C to stop"
 	./$(TARGET)
+
+# Offline render-to-BMP target
+render-bmp: $(TARGET)
+	@mkdir -p bmp_out
+	./$(TARGET) --render-bmp bmp_out 10 1
+	@echo "BMP files saved to bmp_out/"

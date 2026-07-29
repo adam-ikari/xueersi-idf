@@ -3,3 +3,4 @@ tinygl_emu
 test_runner
 build/
 *.o
+bmp_out/

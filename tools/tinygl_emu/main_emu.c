@@ -17,6 +17,8 @@
 #define TGL_EMU_BUILD 1
 
 #include "emu_display.h"
+#include "emu_headless.h"
+#include "emu_bmp.h"
 #include "esp_compat.h"
 #include "display_backend.h"
 #include "GL/gl.h"
@@ -67,6 +69,36 @@ int main(int argc, char **argv)
         }
         printf("=== Results: %d passed, %d failed out of %d ===\n", passed, failed, total);
         return failed > 0 ? 1 : 0;
+    }
+
+    /* Offline render-to-BMP mode (headless, no SDL2 window) */
+    if (argc > 1 && strcmp(argv[1], "--render-bmp") == 0) {
+        const char *out_dir   = (argc > 2) ? argv[2] : ".";
+        int num_frames        = (argc > 3) ? atoi(argv[3]) : 1;
+        int cube_count        = (argc > 4) ? atoi(argv[4]) : 1;
+
+        const display_backend_t *display = &emu_headless_backend;
+        void *fb = display->init(160, 128, PIXEL_FORMAT_RGB565_SWAP);
+        if (!fb) { fprintf(stderr, "Failed to init headless display\n"); return 1; }
+
+        s_display = display;
+        if (gl_init(160, 128) != 0) { fprintf(stderr, "gl_init failed\n"); return 1; }
+
+        tinygl_cube_count = cube_count;
+        tinygl_render_paused = 0;
+
+        char path[256];
+        for (int i = 0; i < num_frames; i++) {
+            float angle = i * 10.0f;
+            render_frame(angle);
+            snprintf(path, sizeof(path), "%s/frame_%03d_c%d.bmp", out_dir, i, cube_count);
+            if (bmp_save_rgb565((uint16_t *)fb, 160, 128, path) != 0) {
+                fprintf(stderr, "Failed to save %s\n", path);
+                return 1;
+            }
+            printf("Saved: %s\n", path);
+        }
+        return 0;
     }
 
     signal(SIGINT, signal_handler);
