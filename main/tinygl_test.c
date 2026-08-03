@@ -632,7 +632,7 @@ void *tinygl_benchmark(void *arg)
     xTaskCreatePinnedToCore(
         wasm3_game_task,
         "wasm3_game",
-        16384,      /* 16KB stack */
+        32768,      /* 32KB stack — wasm3 interpreter + host frames for the GL scene */
         NULL,
         configMAX_PRIORITIES - 2,
         NULL,
