@@ -2,6 +2,13 @@
 #include "msghandling.h"
 #include <stdlib.h>
 
+/* Exact vertex color of an unlit full-bright vertex (glColor 1,1,1 with
+ * GL_LIGHTING off). Matches vertex.c gl_transform_to_viewport_vertex_c.
+ * For such triangles RGB_MIX_FUNC is mathematically the identity, but its
+ * int32 multiply (0xfeffff * 8-bit channel) overflows on bright texels and
+ * scrambles colors — so skip it and write the raw texel instead. */
+#define TGL_FULL_BRIGHT (((GLint)(1.0f * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT)) & COLOR_MASK)  /* 0xfeffff */
+
 
 
 
@@ -368,6 +375,7 @@ static inline float fast_inv_z(float fzl) {
 
 void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
 	PIXEL* texture;
+	int unlit;   /* all 3 vertices full-bright → RGB_MIX is identity (and would overflow) */
 
 	GLubyte zbdw = zb->depth_write;
 	GLubyte zbdt = zb->depth_test;
@@ -387,6 +395,9 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 		fndzdx = NB_INTERP * fdzdx;                                                                                                                            \
 		ndszdx = NB_INTERP * dszdx;                                                                                                                            \
 		ndtzdx = NB_INTERP * dtzdx;                                                                                                                            \
+		unlit = (p0->r == TGL_FULL_BRIGHT && p0->g == TGL_FULL_BRIGHT && p0->b == TGL_FULL_BRIGHT  \
+		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
+		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 	}
 #if TGL_FEATURE_LIT_TEXTURES == 1
 #define OR1OG1OB1DECL                                                                                                                                          \
@@ -430,7 +441,7 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
 			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
-				TGL_BLEND_FUNC(RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));                                                                                      \
+				TGL_BLEND_FUNC(unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));                                                                                      \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -449,6 +460,7 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 
 void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
 	PIXEL* texture;
+	int unlit;   /* all 3 vertices full-bright → RGB_MIX is identity (and would overflow) */
 	
 	GLubyte zbdw = zb->depth_write;
 	GLubyte zbdt = zb->depth_test;
@@ -466,6 +478,9 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 		fndzdx = NB_INTERP * fdzdx;                                                                                                                            \
 		ndszdx = NB_INTERP * dszdx;                                                                                                                            \
 		ndtzdx = NB_INTERP * dtzdx;                                                                                                                            \
+		unlit = (p0->r == TGL_FULL_BRIGHT && p0->g == TGL_FULL_BRIGHT && p0->b == TGL_FULL_BRIGHT  \
+		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
+		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 	}
 #if TGL_FEATURE_LIT_TEXTURES == 1
 #define OR1OG1OB1DECL                                                                                                                                          \
@@ -507,8 +522,8 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
 			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
-				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
-				/*TGL_BLEND_FUNC(RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));*/                                                                                  \
+				pp[_a] = unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
+				/*TGL_BLEND_FUNC(unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));*/                                                                                  \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \
@@ -532,6 +547,7 @@ void ZB_fillTriangleMappingAffine(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p
 
 void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
 	PIXEL* texture;
+	int unlit;   /* all 3 vertices full-bright → RGB_MIX is identity (and would overflow) */
 
 	GLubyte zbdw = zb->depth_write;
 	GLubyte zbdt = zb->depth_test;
@@ -547,6 +563,9 @@ void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferP
 #define DRAW_INIT()                                                                                                                                            \
 	{                                                                                                                                                          \
 		texture = zb->current_texture;                                                                                                                         \
+		unlit = (p0->r == TGL_FULL_BRIGHT && p0->g == TGL_FULL_BRIGHT && p0->b == TGL_FULL_BRIGHT  \
+		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
+		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 	}
 #if TGL_FEATURE_LIT_TEXTURES == 1
 #define OR1OG1OB1DECL                                                                                                                                          \
@@ -588,7 +607,7 @@ void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferP
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
 			PIXEL c = TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
 			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
-				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
+				pp[_a] = unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
 				if (zbdw)                                                                                                                                      \
 					pz[_a] = zz;                                                                                                                               \
 			}                                                                                                                                                  \

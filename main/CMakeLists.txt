@@ -92,7 +92,7 @@ foreach(kind ${TEXTURES})
     list(APPEND TEX_HEADERS ${hdr})
     add_custom_command(
         OUTPUT ${hdr}
-        COMMAND python3 ${GEN_TEX} ${kind} ${hdr} texture_${kind} 256 256
+        COMMAND python3 ${GEN_TEX} ${kind} ${hdr} texture_${kind} 128 128
         DEPENDS ${GEN_TEX}
         VERBATIM
     )

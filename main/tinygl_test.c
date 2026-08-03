@@ -126,8 +126,9 @@ static void draw_reflective_cube(float cx, float cy, float cz, float size,
     glTranslatef(cx, cy, cz);
     glRotatef(rx, 1, 0, 0);
     glRotatef(ry, 0, 1, 0);
-    glBindTexture(GL_TEXTURE_2D, TEX_GRID);
+    glBindTexture(GL_TEXTURE_2D, TEX_HORIZON);   /* desert env map */
     glColor3f(1.0f, 1.0f, 1.0f);
+    glDisable(GL_LIGHTING);   /* mirror: reflect the env, don't shade it */
 
     /* Camera position in world space (before model transform) */
     float eye_x = 0, eye_y = 0, eye_z = 5.0f;
@@ -199,6 +200,7 @@ static void draw_reflective_cube(float cx, float cy, float cz, float size,
     }
     glEnd();
     glPopMatrix();
+    glEnable(GL_LIGHTING);
 }
 
 
@@ -404,7 +406,7 @@ int gl_init(int w, int h)
         };
         for (int i = 0; i < 7; i++) {
             glBindTexture(GL_TEXTURE_2D, texs[i].id);
-            glTexImage2D(GL_TEXTURE_2D, 0, 3, 256, 256, 0,
+            glTexImage2D(GL_TEXTURE_2D, 0, 3, 128, 128, 0,
                          GL_RGB, GL_UNSIGNED_BYTE, texs[i].data);
             ESP_LOGI(TAG, "Texture %d uploaded: %s", texs[i].id, texs[i].name);
         }
@@ -445,6 +447,9 @@ void render_frame(float angle_y)
     glTranslatef(0, 0, -3.5f);
     glRotatef(25, 1, 0, 0);
     glRotatef(angle_y, 0, 1, 0);
+
+    /* Reflective cube — env-map simulated reflection of the desert. */
+    draw_reflective_cube(0.0f, 0.0f, 0.0f, 1.4f, 0.0f, angle_y);
 
     /* Drain the render queue — all draw calls are issued by core 0. */
     render_queue_drain(render_cmd_draw);
