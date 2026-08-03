@@ -363,9 +363,16 @@ static GLuint dither_callback(GLint x, GLint y, GLuint pixel, GLushort z)
     return (GLuint)w;
 }
 
+/* ── Post-process hook ──────────────────────────────────
+ * Pipeline stage between render and DMA. No-op for now;
+ * future: dither / color grade / temporal effects using the retained past frame. */
+__attribute__((weak)) void gl_post_process(uint16_t *fb, int w, int h)
+{
+    (void)fb; (void)w; (void)h;
+}
+
 /* ── Copy TinyGL framebuffer to display ──────────────────
- * Applies inline 4×4 ordered Bayer dithering to reduce 16-bit RGB565
- * color banding (visible as "shadow steps" in Gouraud lighting). */
+ * DMA current render target; the display backend advances its rotation. */
 static void gl_flush_to_display(void)
 {
     s_display->flush();
@@ -470,8 +477,13 @@ void render_frame(float angle_y)
     uint32_t len;
     const uint8_t *buf = glcmd_frame_poll(&len);
     if (buf) {
+        s_display->wait_dma();                 /* target buffer free */
+        uint16_t *target = (uint16_t *)s_display->get_buffer();
+        zb_set_pbuf(s_zb, target);             /* TinyGL renders here */
         glcmd_replay(buf, len);
         glcmd_frame_release();
+        gl_post_process(target, s_width, s_height);
+        gl_flush_to_display();                 /* DMA target + advance rotation */
     }
 #else
     /* Non-wasm fallback: native scene queue on the clear color. */

@@ -2,17 +2,18 @@
  * ST7735 display backend implementation for the display_backend_t interface.
  *
  * 160x128 RGB565 byte-swapped, SPI2 DMA through hw_display_flush.
- * Single framebuffer with DMA sync: flush() starts DMA and returns immediately.
- * wait_dma() must be called at the START of each frame (before glClear) to
- * ensure the previous frame's DMA transfer is complete — otherwise rendering
- * would corrupt the buffer being transmitted by DMA, causing tearing.
+ * N-framebuffer pipeline (DISPLAY_NUM_BUFFERS): render → post-process → DMA.
+ * flush() DMA-sends the current render target and advances the rotation;
+ * wait_dma() only blocks if the buffer about to become the render target still
+ * has a pending DMA (never in steady state: DMA 5.5ms vs 33ms frame, N buffers).
  *
  * Timeline per frame:
- *   wait_dma()  — block until previous DMA done (0–8ms)
- *   glClear()   — safe to write pbuf now
- *   render()    — draw geometry (~15ms)
- *   flush()     — start DMA of current frame, return immediately
- *   vTaskDelay  — yield, remaining time to 30fps target
+ *   wait_dma()              — block only if NEXT render target's DMA in flight
+ *   get_buffer()            — current render target (rotates per flush)
+ *   zb_set_pbuf()           — TinyGL renders into that target
+ *   gl_post_process()       — no-op hook between render and DMA
+ *   flush()                 — DMA current target, advance rotation
+ *   vTaskDelay              — yield, remaining time to 30fps target
  */
 
 #include "display_backend.h"
@@ -38,17 +39,22 @@ static void hw_display_set_flush_ready_cb(void *cb, void *ctx) { (void)cb; (void
 
 static const char *TAG = "st7735_be";
 
-static uint16_t *s_fb     = NULL;
-static int       s_w      = 0;
-static int       s_h      = 0;
-static int       s_fmt    = 0;
+#ifndef DISPLAY_NUM_BUFFERS
+#define DISPLAY_NUM_BUFFERS 3   /* render / post / DMA pipeline */
+#endif
+
+static uint16_t *s_fb[DISPLAY_NUM_BUFFERS] = { 0 };
+static int       s_cur = 0;                 /* current render target */
+static int       s_w = 0, s_h = 0, s_fmt = 0;
 
 #ifndef TGL_EMU_BUILD
 static SemaphoreHandle_t s_dma_done_sem = NULL;
-static volatile bool     s_dma_busy = false;
+static volatile bool     s_dma_busy[DISPLAY_NUM_BUFFERS] = { false };
+static volatile int      s_pending_buf = -1;   /* which buffer's DMA is in flight */
 
 static bool IRAM_ATTR flush_ready_cb(void *ctx) {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    if (s_pending_buf >= 0) s_dma_busy[s_pending_buf] = false;
     xSemaphoreGiveFromISR((SemaphoreHandle_t)ctx, &xHigherPriorityTaskWoken);
     return xHigherPriorityTaskWoken == pdTRUE;
 }
@@ -56,68 +62,59 @@ static bool IRAM_ATTR flush_ready_cb(void *ctx) {
 
 static void *st7735_init(int w, int h, int pixel_format)
 {
-    s_w   = w;
-    s_h   = h;
-    s_fmt = pixel_format;
-
-    s_fb = (uint16_t *)heap_caps_malloc(w * h * 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-    if (!s_fb) {
-        ESP_LOGE(TAG, "Failed to allocate framebuffer");
-        return NULL;
+    s_w = w; s_h = h; s_fmt = pixel_format;
+    for (int i = 0; i < DISPLAY_NUM_BUFFERS; i++) {
+        s_fb[i] = (uint16_t *)heap_caps_malloc(w * h * 2,
+                    MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
+        if (!s_fb[i]) { ESP_LOGE(TAG, "fb[%d] alloc failed", i); return NULL; }
+        memset(s_fb[i], 0, w * h * 2);
     }
-
-    memset(s_fb, 0, w * h * 2);
-
 #ifndef TGL_EMU_BUILD
     s_dma_done_sem = xSemaphoreCreateBinary();
-    if (!s_dma_done_sem) {
-        ESP_LOGE(TAG, "Failed to create DMA semaphore");
-        return NULL;
-    }
+    if (!s_dma_done_sem) { ESP_LOGE(TAG, "DMA sem failed"); return NULL; }
     hw_display_set_flush_ready_cb(flush_ready_cb, s_dma_done_sem);
 #endif
-
     hw_display_on();
-    ESP_LOGI(TAG, "ST7735 single-fb backend: %dx%d fmt=%d, fb=%p", w, h, pixel_format, s_fb);
-    return s_fb;
+    ESP_LOGI(TAG, "ST7735 %d-fb backend: %dx%d fmt=%d", DISPLAY_NUM_BUFFERS, w, h, pixel_format);
+    return s_fb[0];
 }
 
 static void st7735_clear(uint16_t color)
 {
-    if (!s_fb) return;
+    if (!s_fb[s_cur]) return;
     for (int i = 0; i < s_w * s_h; i++) {
-        s_fb[i] = color;
+        s_fb[s_cur][i] = color;
     }
 }
 
-/* Wait for previous frame's DMA to complete. Called at START of each frame
- * before any pbuf writes, so rendering doesn't corrupt the buffer being
- * transmitted. Overlaps the wait with vTaskDelay from the frame limiter. */
+/* Only block if the buffer we're about to render into still has a pending
+ * DMA. Steady state (DMA 5.5ms vs 33ms frame, N buffers): never blocks. */
 static void st7735_wait_dma(void)
 {
 #ifndef TGL_EMU_BUILD
-    if (s_dma_busy) {
-        xSemaphoreTake(s_dma_done_sem, portMAX_DELAY);
-        s_dma_busy = false;
+    if (s_dma_busy[s_cur]) {
+        xSemaphoreTake(s_dma_done_sem, portMAX_DELAY);   /* ISR cleared s_dma_busy */
     }
 #endif
 }
 
-/* Start DMA transfer of current frame. Returns immediately — DMA runs
- * in background. The next st7735_wait_dma() will synchronize. */
+/* DMA current render target, then advance rotation. Returns immediately —
+ * DMA runs in background; the next st7735_wait_dma() synchronizes. */
 static void st7735_flush(void)
 {
-    if (!s_fb) return;
+    if (!s_fb[s_cur]) return;
 
 #ifndef TGL_EMU_BUILD
-    hw_display_flush(0, 0, s_w - 1, s_h - 1, (uint8_t *)s_fb);
-    s_dma_busy = true;
+    s_dma_busy[s_cur] = true;
+    s_pending_buf = s_cur;
+    hw_display_flush(0, 0, s_w - 1, s_h - 1, (uint8_t *)s_fb[s_cur]);
+    s_cur = (s_cur + 1) % DISPLAY_NUM_BUFFERS;
 #endif
 }
 
-static void *st7735_get_buffer(void)  { return s_fb; }
-static int  st7735_get_width(void)   { return s_w; }
-static int  st7735_get_height(void)  { return s_h; }
+static void *st7735_get_buffer(void)  { return s_fb[s_cur]; }
+static int  st7735_get_width(void)    { return s_w; }
+static int  st7735_get_height(void)   { return s_h; }
 
 const display_backend_t st7735_display_backend = {
     .init       = st7735_init,

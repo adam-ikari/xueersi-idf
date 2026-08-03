@@ -19,7 +19,7 @@ it's in the GL spec that this should occur.
 Swap between using the inline'd malloc(), calloc(), and free() in zbuffer.h, or
 a replacement gl_malloc(), gl_zalloc(), and gl_free() in memory.c
 */
-#define TGL_FEATURE_CUSTOM_MALLOC 0
+#define TGL_FEATURE_CUSTOM_MALLOC 1
 
 /*
 Use Fast Inverse Square Root. Toggleable because it's actually slower on some platforms,

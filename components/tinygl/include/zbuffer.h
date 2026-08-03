@@ -312,6 +312,10 @@ void ZB_clear(ZBuffer *zb,GLint clear_z,GLint z,
 /* linesize is in BYTES */
 void ZB_copyFrameBuffer(ZBuffer *zb,void *buf,GLint linesize);
 
+/* Repoint the render target (pbuf) without taking ownership. Used by the
+ * N-framebuffer display pipeline to rotate targets per frame. */
+void zb_set_pbuf(ZBuffer *zb, void *pbuf);
+
 /* zdither.c */
 
 /*

@@ -74,6 +74,15 @@ void ZB_close(ZBuffer* zb) {
 	gl_free(zb);
 }
 
+/* Repoint the render target (pbuf). The caller (display backend) keeps
+ * ownership; we only stop treating it as ours to free. */
+void zb_set_pbuf(ZBuffer* zb, void* pbuf)
+{
+	if (!zb) return;
+	zb->pbuf = pbuf;
+	zb->frame_buffer_allocated = 0;
+}
+
 void ZB_resize(ZBuffer* zb, void* frame_buffer, GLint xsize, GLint ysize) {
 	GLint size;
 
