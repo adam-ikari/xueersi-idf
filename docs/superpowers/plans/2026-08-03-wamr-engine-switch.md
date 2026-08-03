@@ -232,7 +232,7 @@ void wasm_game_task(void *arg)
     xTaskCreatePinnedToCore(
         wasm_game_task,
         "wasm_game",
-        32768,
+        8192,   /* 32KB = 8192 words on xtensa (StackType_t=4B) */
         NULL,
         configMAX_PRIORITIES - 2,
         NULL,

@@ -640,11 +640,13 @@ void *tinygl_benchmark(void *arg)
 #ifdef TGL_WASM_GAME
     /* Core 0: wasm game task — the sole author of the scene via GL commands.
      * WAMR fast interpreter has a bounded native stack (no per-opcode growth
-     * like wasm3), so a plain 32KB SRAM stack suffices. */
+     * like wasm3), so a plain 32KB SRAM stack suffices.
+     * Note: xTaskCreate* usStackDepth is in StackType_t WORDS (4 B on xtensa
+     * ESP32), so 8192 words = 32 KB. */
     xTaskCreatePinnedToCore(
         wasm_game_task,
         "wasm_game",
-        32768,
+        8192,
         NULL,
         configMAX_PRIORITIES - 2,
         NULL,
