@@ -30,6 +30,9 @@
 #include "texture_sky.h"
 #include "texture_sand.h"
 #include "texture_horizon.h"
+#include "texture_metal.h"
+#include "texture_specular.h"
+#include "texture_reflect.h"
 #include "tinygl_physics.h"
 #include "render_queue.h"
 
@@ -81,13 +84,16 @@ static int s_width  = 160;
 static int s_height = 128;
 
 /* Texture name → texture IDs (must match glBindTexture calls in draw_*). */
-#define TEX_CERAMIC 1
-#define TEX_CHECKER 2
-#define TEX_BRICK   3
-#define TEX_GRID    4
-#define TEX_SKY     5
-#define TEX_SAND    6
-#define TEX_HORIZON 7
+#define TEX_CERAMIC  1
+#define TEX_CHECKER  2
+#define TEX_BRICK    3
+#define TEX_GRID     4
+#define TEX_SKY      5
+#define TEX_SAND     6
+#define TEX_HORIZON  7
+#define TEX_METAL    8
+#define TEX_SPECULAR 9
+#define TEX_REFLECT  10
 
 /* ── Spawn a falling cube into the physics engine (called by debug console). */
 int tinygl_spawn_cube(void)
@@ -215,6 +221,72 @@ static void draw_textured_cube(float x, float y, float z, float size,
     glRotatef(ry, 0, 1, 0);
     glBindTexture(GL_TEXTURE_2D, tex_id);
     glColor3f(1.0f, 1.0f, 1.0f);
+
+    glBegin(GL_QUADS);
+    /* Front  (+Z) */ glNormal3f(0,0,1);  glTexCoord2f(0,0); glVertex3f(-s,-s, s);
+                     glNormal3f(0,0,1);  glTexCoord2f(1,0); glVertex3f( s,-s, s);
+                     glNormal3f(0,0,1);  glTexCoord2f(1,1); glVertex3f( s, s, s);
+                     glNormal3f(0,0,1);  glTexCoord2f(0,1); glVertex3f(-s, s, s);
+    /* Back   (-Z) */ glNormal3f(0,0,-1); glTexCoord2f(0,0); glVertex3f( s,-s,-s);
+                     glNormal3f(0,0,-1); glTexCoord2f(1,0); glVertex3f(-s,-s,-s);
+                     glNormal3f(0,0,-1); glTexCoord2f(1,1); glVertex3f(-s, s,-s);
+                     glNormal3f(0,0,-1); glTexCoord2f(0,1); glVertex3f( s, s,-s);
+    /* Top    (+Y) */ glNormal3f(0,1,0);  glTexCoord2f(0,0); glVertex3f(-s, s, s);
+                     glNormal3f(0,1,0);  glTexCoord2f(1,0); glVertex3f( s, s, s);
+                     glNormal3f(0,1,0);  glTexCoord2f(1,1); glVertex3f( s, s,-s);
+                     glNormal3f(0,1,0);  glTexCoord2f(0,1); glVertex3f(-s, s,-s);
+    /* Bottom (-Y) */ glNormal3f(0,-1,0); glTexCoord2f(0,0); glVertex3f(-s,-s,-s);
+                     glNormal3f(0,-1,0); glTexCoord2f(1,0); glVertex3f( s,-s,-s);
+                     glNormal3f(0,-1,0); glTexCoord2f(1,1); glVertex3f( s,-s, s);
+                     glNormal3f(0,-1,0); glTexCoord2f(0,1); glVertex3f(-s,-s, s);
+    /* Right  (+X) */ glNormal3f(1,0,0);  glTexCoord2f(0,0); glVertex3f( s,-s, s);
+                     glNormal3f(1,0,0);  glTexCoord2f(1,0); glVertex3f( s,-s,-s);
+                     glNormal3f(1,0,0);  glTexCoord2f(1,1); glVertex3f( s, s,-s);
+                     glNormal3f(1,0,0);  glTexCoord2f(0,1); glVertex3f( s, s, s);
+    /* Left   (-X) */ glNormal3f(-1,0,0); glTexCoord2f(0,0); glVertex3f(-s,-s,-s);
+                     glNormal3f(-1,0,0); glTexCoord2f(1,0); glVertex3f(-s,-s, s);
+                     glNormal3f(-1,0,0); glTexCoord2f(1,1); glVertex3f(-s, s, s);
+                     glNormal3f(-1,0,0); glTexCoord2f(0,1); glVertex3f(-s, s,-s);
+    glEnd();
+    glPopMatrix();
+}
+
+/* ── Metal cube: 3-layer additive multi-texture blend ──
+ *   unit 0: metal base (GL_REPLACE)
+ *   unit 1: desert reflection map (GL_ADD, weight 0.5)
+ *   unit 2: specular highlight (GL_ADD, weight 0.35)
+ * The rasterizer blends units 1+ additively over unit 0 (see ztriangle.c). */
+static void draw_metal_cube(float x, float y, float z, float size,
+                            float rx, float ry)
+{
+    float s = size * 0.5f;
+    glPushMatrix();
+    glTranslatef(x, y, z);
+    glRotatef(rx, 1, 0, 0);
+    glRotatef(ry, 0, 1, 0);
+    glColor3f(1.0f, 1.0f, 1.0f);
+
+    /* Unit 0: metal base */
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, TEX_METAL);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+
+    /* Unit 1: desert reflection (ADD, weight 0.5) */
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR,
+               (const GLfloat[]){0.5f, 0.5f, 0.5f, 1.0f});
+
+    /* Unit 2: specular highlight (ADD, weight 0.35) */
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR,
+               (const GLfloat[]){0.35f, 0.35f, 0.35f, 1.0f});
+
+    /* Back to unit 0, draw the cube */
+    glActiveTexture(GL_TEXTURE0);
 
     glBegin(GL_QUADS);
     /* Front  (+Z) */ glNormal3f(0,0,1);  glTexCoord2f(0,0); glVertex3f(-s,-s, s);
@@ -393,25 +465,28 @@ int gl_init(int w, int h)
     glMaterialfv(GL_FRONT, GL_DIFFUSE, mat_dif);
     ESP_LOGI(TAG, "Lighting enabled (LIGHT0 directional + ambient)");
 
-    /* ── Textures ── 7 compile-time textures uploaded to flash-backed IDs. */
+    /* ── Textures ── 10 compile-time textures uploaded to flash-backed IDs. */
     {
         struct { GLuint id; const GLvoid *data; const char *name; } texs[] = {
-            { TEX_CERAMIC, texture_ceramic_data, "ceramic" },
-            { TEX_CHECKER, texture_checker_data, "checker" },
-            { TEX_BRICK,   texture_brick_data,   "brick"   },
-            { TEX_GRID,    texture_grid_data,    "grid"    },
-            { TEX_SKY,     texture_sky_data,     "sky"     },
-            { TEX_SAND,    texture_sand_data,    "sand"    },
-            { TEX_HORIZON, texture_horizon_data, "horizon" },
+            { TEX_CERAMIC,  texture_ceramic_data,  "ceramic"  },
+            { TEX_CHECKER,  texture_checker_data,  "checker"  },
+            { TEX_BRICK,    texture_brick_data,    "brick"    },
+            { TEX_GRID,     texture_grid_data,     "grid"     },
+            { TEX_SKY,      texture_sky_data,      "sky"      },
+            { TEX_SAND,     texture_sand_data,     "sand"     },
+            { TEX_HORIZON,  texture_horizon_data,  "horizon"  },
+            { TEX_METAL,    texture_metal_data,    "metal"    },
+            { TEX_SPECULAR, texture_specular_data, "specular" },
+            { TEX_REFLECT,  texture_reflect_data,  "reflect"  },
         };
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 10; i++) {
             glBindTexture(GL_TEXTURE_2D, texs[i].id);
             glTexImage2D(GL_TEXTURE_2D, 0, 3, 128, 128, 0,
                          GL_RGB, GL_UNSIGNED_BYTE, texs[i].data);
             ESP_LOGI(TAG, "Texture %d uploaded: %s", texs[i].id, texs[i].name);
         }
         glEnable(GL_TEXTURE_2D);
-        ESP_LOGI(TAG, "GL_TEXTURE_2D enabled (7 textures bound)");
+        ESP_LOGI(TAG, "GL_TEXTURE_2D enabled (10 textures bound)");
     }
 
     diag_fb("after_init");
@@ -448,8 +523,15 @@ void render_frame(float angle_y)
     glRotatef(25, 1, 0, 0);
     glRotatef(angle_y, 0, 1, 0);
 
-    /* Reflective cube — env-map simulated reflection of the desert. */
-    draw_reflective_cube(0.0f, 0.0f, 0.0f, 1.4f, 0.0f, angle_y);
+    /* Metal cube — 3-layer additive multi-texture (metal + reflection + specular). */
+    draw_metal_cube(0.0f, 0.0f, 0.0f, 1.6f, 0.0f, angle_y);
+
+    /* Reset units 1+ to REPLACE so the queue cubes aren't multi-textured. */
+    glActiveTexture(GL_TEXTURE1);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glActiveTexture(GL_TEXTURE2);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    glActiveTexture(GL_TEXTURE0);
 
     /* Drain the render queue — all draw calls are issued by core 0. */
     render_queue_drain(render_cmd_draw);

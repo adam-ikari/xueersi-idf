@@ -178,6 +178,93 @@ def gen_sand(width: int, height: int) -> bytearray:
     return buf
 
 
+def gen_metal(width: int, height: int) -> bytearray:
+    """Metallic base: cool steel gradient with brushed streaks."""
+    buf = bytearray(width * height * 3)
+    for y in range(height):
+        base = 120 + (y * 60 // height)
+        for x in range(width):
+            streak = ((x * 31 + y * 7) & 15) - 8
+            r = max(0, min(255, base + streak))
+            g = max(0, min(255, base + streak))
+            b = max(0, min(255, base + streak + 10))
+            i = (y * width + x) * 3
+            buf[i] = r; buf[i+1] = g; buf[i+2] = b
+    return buf
+
+
+def gen_specular(width: int, height: int) -> bytearray:
+    """Specular highlight mask: bright radial blob on black."""
+    buf = bytearray(width * height * 3)
+    cx, cy = width // 2, height // 2
+    maxd2 = cx * cx + cy * cy
+    for y in range(height):
+        for x in range(width):
+            d2 = (x - cx)**2 + (y - cy)**2
+            f = 1.0 - d2 / maxd2
+            if f < 0.0:
+                f = 0.0
+            v = int(f * f * 255)
+            i = (y * width + x) * 3
+            buf[i] = v; buf[i+1] = v; buf[i+2] = v
+    return buf
+
+
+def gen_reflect(width: int, height: int) -> bytearray:
+    """Desert environment reflection: blue sky + clouds above, sand below.
+
+    Used as the metal cube's ADD reflection overlay — matches the skybox."""
+    buf = bytearray(width * height * 3)
+    horizon = 0.5
+    band = 0.05
+    clouds = [
+        (0.30, 0.75, 0.16, 0.20),
+        (0.65, 0.60, 0.20, 0.14),
+        (0.50, 0.85, 0.18, 0.12),
+        (0.85, 0.70, 0.13, 0.16),
+        (0.15, 0.65, 0.15, 0.13),
+    ]
+    for y in range(height):
+        v = y / height
+        for x in range(width):
+            u = x / width
+            if v < horizon - band:
+                n = ((x * 13 + y * 29) & 15) - 8
+                r, g, b = 214 + n, 182 + n, 132 + n
+            else:
+                t = (v - horizon) / (1.0 - horizon)
+                if t < 0.0:
+                    t = 0.0
+                sr = 70 + 60 * t
+                sg = 120 + 60 * t
+                sb = 190 + 40 * t
+                cloud = 0.0
+                for (cx, cy, rx, ry) in clouds:
+                    dx = (u - cx) / rx
+                    dy = (v - cy) / ry
+                    d2 = dx * dx + dy * dy
+                    if d2 < 1.0:
+                        cloud += (1.0 - d2) * (1.0 - d2)
+                if cloud > 1.0:
+                    cloud = 1.0
+                sr += (255 - sr) * cloud
+                sg += (255 - sg) * cloud
+                sb += (255 - sb) * cloud
+                if v < horizon + band:
+                    f = (v - (horizon - band)) / (2 * band)
+                    n = ((x * 13 + y * 29) & 15) - 8
+                    r = (214 + n) * (1 - f) + sr * f
+                    g = (182 + n) * (1 - f) + sg * f
+                    b = (132 + n) * (1 - f) + sb * f
+                else:
+                    r, g, b = sr, sg, sb
+            i = (y * width + x) * 3
+            buf[i] = max(0, min(255, int(r)))
+            buf[i + 1] = max(0, min(255, int(g)))
+            buf[i + 2] = max(0, min(255, int(b)))
+    return buf
+
+
 def gen_horizon(width: int, height: int) -> bytearray:
     """Desert horizon: sand below, blue sky with clouds above, soft transition.
 
@@ -236,13 +323,16 @@ def gen_horizon(width: int, height: int) -> bytearray:
 
 
 KINDS = {
-    "ceramic": gen_ceramic,
-    "checker": gen_checker,
-    "brick":   gen_brick,
-    "grid":    gen_grid,
-    "sky":     gen_sky,
-    "sand":    gen_sand,
-    "horizon": gen_horizon,
+    "ceramic":  gen_ceramic,
+    "checker":  gen_checker,
+    "brick":    gen_brick,
+    "grid":     gen_grid,
+    "sky":      gen_sky,
+    "sand":     gen_sand,
+    "horizon":  gen_horizon,
+    "metal":    gen_metal,
+    "specular": gen_specular,
+    "reflect":  gen_reflect,
 }
 
 

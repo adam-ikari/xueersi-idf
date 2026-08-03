@@ -45,6 +45,7 @@ enum {
 #define MAX_TEXTURE_STACK_DEPTH 8
 #define MAX_NAME_STACK_DEPTH 16
 #define MAX_TEXTURE_LEVELS 1
+#define MAX_TEXTURE_UNITS 4
 #define MAX_LIGHTS 16
 
 #define VERTEX_ARRAY 0x0001
@@ -153,6 +154,14 @@ typedef struct GLTexture {
 	GLint handle;
 } GLTexture;
 
+/* Multi-texture: per-unit environment state for GL_ADD/GL_REPLACE blending. */
+typedef struct GLTextureUnit {
+	GLTexture *texture;          /* bound texture, NULL = disabled */
+	GLint env_mode;              /* GL_REPLACE / GL_ADD */
+	GLfloat env_color[4];        /* GL_TEXTURE_ENV_COLOR (ADD weight in [0]) */
+	GLfloat u_off, v_off;        /* per-unit UV offset (texcoord scroll) */
+} GLTextureUnit;
+
 /* buffers */
 #define MAX_BUFFERS 2048
 typedef struct GLBuffer {
@@ -196,6 +205,8 @@ typedef struct GLContext {
 	ZBuffer* zb;
 	GLLight* first_light;
 	GLTexture* current_texture;
+	GLint active_texture_unit;
+	GLTextureUnit tex_unit[MAX_TEXTURE_UNITS];
 	GLParamBuffer* current_op_buffer;
 	M4* matrix_stack[3];
 	M4* matrix_stack_ptr[3];

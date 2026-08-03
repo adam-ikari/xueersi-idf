@@ -515,6 +515,9 @@ enum {
 	GL_TEXTURE_ENV_MODE		= 0x2200,
 	GL_TEXTURE_1D			= 0x0DE0,
 	GL_TEXTURE_2D			= 0x0DE1,
+	GL_TEXTURE0			= 0x84C0,
+	GL_TEXTURE1			= 0x84C1,
+	GL_TEXTURE2			= 0x84C2,
 	GL_TEXTURE_WRAP_S		= 0x2802,
 	GL_TEXTURE_WRAP_T		= 0x2803,
 	GL_TEXTURE_MAG_FILTER		= 0x2800,
@@ -906,6 +909,8 @@ void glCopyTexImage2D(	GLenum target,
 					 	GLsizei height,
 					 	GLint border);
 void glTexEnvi(GLint target,GLint pname,GLint param);
+void glTexEnvfv(GLenum target,GLenum pname,const GLfloat *params);
+void glActiveTexture(GLenum texture);
 
 void glTexParameteri(GLint target,GLint pname,GLint param);
 

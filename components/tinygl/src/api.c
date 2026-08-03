@@ -537,18 +537,34 @@ void glBindTexture(GLint target, GLint texture) {
 	gl_add_op(p);
 }
 
+void glActiveTexture(GLenum texture) {
+	GLContext *c = gl_get_context();
+	int unit = texture - GL_TEXTURE0;
+	if (unit >= 0 && unit < MAX_TEXTURE_UNITS) {
+		c->active_texture_unit = unit;
+		c->current_texture = c->tex_unit[unit].texture;
+	}
+}
+
 void glTexEnvi(GLint target, GLint pname, GLint param) {
+	GLContext *c = gl_get_context();
+	if (target != GL_TEXTURE_ENV) return;
+	int unit = c->active_texture_unit;
+	if (pname == GL_TEXTURE_ENV_MODE) {
+		c->tex_unit[unit].env_mode = param;
+	}
+}
 
-#include "error_check_no_context.h"
-
-
-
-
-
-
-
-
-
+void glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params) {
+	GLContext *c = gl_get_context();
+	if (target != GL_TEXTURE_ENV || !params) return;
+	int unit = c->active_texture_unit;
+	if (pname == GL_TEXTURE_ENV_COLOR) {
+		c->tex_unit[unit].env_color[0] = params[0];
+		c->tex_unit[unit].env_color[1] = params[1];
+		c->tex_unit[unit].env_color[2] = params[2];
+		c->tex_unit[unit].env_color[3] = params[3];
+	}
 }
 
 void glTexParameteri(GLint target, GLint pname, GLint param) {

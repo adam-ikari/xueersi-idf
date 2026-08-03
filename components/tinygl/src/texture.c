@@ -114,6 +114,17 @@ void glInitTextures() {
 	GLContext* c = gl_get_context();
 	c->texture_2d_enabled = 0;
 	c->current_texture = find_texture(0);
+	c->active_texture_unit = 0;
+	for (int i = 0; i < MAX_TEXTURE_UNITS; i++) {
+		c->tex_unit[i].texture = NULL;
+		c->tex_unit[i].env_mode = GL_REPLACE;
+		c->tex_unit[i].env_color[0] = 0;
+		c->tex_unit[i].env_color[1] = 0;
+		c->tex_unit[i].env_color[2] = 0;
+		c->tex_unit[i].env_color[3] = 0;
+		c->tex_unit[i].u_off = 0;
+		c->tex_unit[i].v_off = 0;
+	}
 }
 
 void glGenTextures(GLint n, GLuint* textures) {
@@ -178,6 +189,9 @@ void glopBindTexture(GLParam* p) {
 #endif
 	}
 	c->current_texture = t;
+		/* Multi-texture: also bind to the active unit so units 1+ */
+		/* can be addressed by the multitex blend. */
+		c->tex_unit[c->active_texture_unit].texture = t;
 }
 
 
