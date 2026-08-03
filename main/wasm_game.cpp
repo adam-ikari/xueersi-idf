@@ -172,16 +172,12 @@ static void draw_metal_cube(float hs)
     glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.9f, 0.9f, 0.9f, 1.0f);
 
     glActiveTexture(GL_TEXTURE0);
-    /* Lighting OFF so the reflection/specular layers aren't dimmed by shading —
-     * the multi-texture blend shows at full strength (a simulated reflection). */
-    glDisable(GL_LIGHTING);
     glPushMatrix();
     /* Tumble about two axes so all faces/reflection are visible. */
     glRotatef(s_angle, 0, 1, 0);
     glRotatef(s_angle * 0.6f, 1, 0, 0);
     cube(hs);
     glPopMatrix();
-    glEnable(GL_LIGHTING);
 
     /* Reset units 1+ to REPLACE so the small cube isn't multi-textured. */
     glActiveTexture(GL_TEXTURE1);
