@@ -160,17 +160,19 @@ static void draw_metal_cube(float hs)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.7f, 0.7f, 0.7f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.4f, 0.4f, 0.4f, 1.0f);
     glTexOffset(GL_TEXTURE1, s_scroll_u, s_scroll_v);
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.5f, 0.5f, 0.5f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.8f, 0.8f, 0.8f, 1.0f);
 
     glActiveTexture(GL_TEXTURE0);
     glPushMatrix();
+    /* Tumble about two axes so all faces/reflection are visible. */
     glRotatef(s_angle, 0, 1, 0);
+    glRotatef(s_angle * 0.6f, 1, 0, 0);
     cube(hs);
     glPopMatrix();
 

@@ -179,10 +179,14 @@ def gen_sand(width: int, height: int) -> bytearray:
 
 
 def gen_metal(width: int, height: int) -> bytearray:
-    """Metallic base: cool steel gradient with brushed streaks."""
+    """Metallic base: cool steel gradient with brushed streaks.
+
+    Kept on the darker side so the ADD reflection + specular layers have
+    headroom before clamping (otherwise the cube saturates to white and the
+    specular highlight is invisible)."""
     buf = bytearray(width * height * 3)
     for y in range(height):
-        base = 120 + (y * 60 // height)
+        base = 70 + (y * 50 // height)
         for x in range(width):
             streak = ((x * 31 + y * 7) & 15) - 8
             r = max(0, min(255, base + streak))
