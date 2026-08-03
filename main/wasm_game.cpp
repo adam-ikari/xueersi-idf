@@ -70,9 +70,9 @@ enum {
 };
 
 // ── Global state ────────────────────────────────────────
-static float s_angle = 0.0f;
-static float s_scroll_u = 0.0f;
-static float s_scroll_v = 0.0f;
+static float s_angle = 0.0f;      /* cube rotation (fast) */
+static float s_sky_angle = 0.0f;  /* skybox rotation (slower) */
+static float s_scroll_v = 0.0f;   /* vertical reflection drift */
 
 // ── Draw a cube of half-size hs, centred at origin ─────
 static void cube(float hs)
@@ -161,7 +161,9 @@ static void draw_metal_cube(float hs)
     glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
     glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.4f, 0.4f, 0.4f, 1.0f);
-    glTexOffset(GL_TEXTURE1, s_scroll_u, s_scroll_v);
+    /* Reflection scroll synchronized with the skybox rotation: one full
+     * texture cycle per skybox revolution (u = angle/360). */
+    glTexOffset(GL_TEXTURE1, s_sky_angle / 360.0f, s_scroll_v);
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);
@@ -201,18 +203,19 @@ extern "C" void game_update(void)
 {
     s_angle += 2.0f;
     if (s_angle >= 360.0f) s_angle -= 360.0f;
-    /* Environment-map flow: scroll the reflection overlay each frame. */
-    s_scroll_u += 0.008f;
-    s_scroll_v += 0.004f;
+    /* Skybox rotates slower than the cube. */
+    s_sky_angle += 0.8f;
+    if (s_sky_angle >= 360.0f) s_sky_angle -= 360.0f;
+    /* Slow vertical drift for the reflection overlay. */
+    s_scroll_v += 0.001f;
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glMatrixMode(GL_MODELVIEW);
 
-    /* Skybox camera (rotation only) — rotates SLOWER than the scene so the
-     * environment visibly changes relative to the cube. */
+    /* Skybox camera (rotation only) — rotates SLOWER than the cube. */
     glLoadIdentity();
     glRotatef(25, 1, 0, 0);
-    glRotatef(s_angle * 0.4f, 0, 1, 0);
+    glRotatef(s_sky_angle, 0, 1, 0);
     draw_skybox();
 
     /* Scene camera */
