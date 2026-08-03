@@ -1,6 +1,7 @@
 #include "../include/zbuffer.h"
 #include "msghandling.h"
 #include "zgl.h"   /* GLTextureUnit, MAX_TEXTURE_UNITS for multi-texture */
+#include "esp_log.h"
 #include <stdlib.h>
 
 /* Exact vertex color of an unlit full-bright vertex (glColor 1,1,1 with
@@ -444,6 +445,11 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
 		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 		tgl_units = &gl_get_context()->tex_unit[0];                                                      \
+		{ static int lg = 0; if (lg < 60) { lg++;                                                                  \
+		  ESP_LOGI("dbg", "scan tex=%p u1m=0x%x u1t=%p u1x=%d w=%.1f | u2m=0x%x", texture,                                  \
+		    tgl_units[1].env_mode, tgl_units[1].texture,                                                              \
+		    tgl_units[1].texture ? tgl_units[1].texture->images[0].xsize : -1,                                         \
+		    tgl_units[1].env_color[0], tgl_units[2].env_mode); } }                                                  \
 		tgl_n_extra = 0;                                                                                  \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
@@ -549,6 +555,11 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
 		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 		tgl_units = &gl_get_context()->tex_unit[0];                                                      \
+		{ static int lg = 0; if (lg < 60) { lg++;                                                                  \
+		  ESP_LOGI("dbg", "scan tex=%p u1m=0x%x u1t=%p u1x=%d w=%.1f | u2m=0x%x", texture,                                  \
+		    tgl_units[1].env_mode, tgl_units[1].texture,                                                              \
+		    tgl_units[1].texture ? tgl_units[1].texture->images[0].xsize : -1,                                         \
+		    tgl_units[1].env_color[0], tgl_units[2].env_mode); } }                                                  \
 		tgl_n_extra = 0;                                                                                  \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
@@ -656,6 +667,11 @@ void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferP
 		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
 		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 		tgl_units = &gl_get_context()->tex_unit[0];                                                      \
+		{ static int lg = 0; if (lg < 60) { lg++;                                                                  \
+		  ESP_LOGI("dbg", "scan tex=%p u1m=0x%x u1t=%p u1x=%d w=%.1f | u2m=0x%x", texture,                                  \
+		    tgl_units[1].env_mode, tgl_units[1].texture,                                                              \
+		    tgl_units[1].texture ? tgl_units[1].texture->images[0].xsize : -1,                                         \
+		    tgl_units[1].env_color[0], tgl_units[2].env_mode); } }                                                  \
 		tgl_n_extra = 0;                                                                                  \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
