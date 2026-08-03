@@ -462,6 +462,8 @@ void render_frame(float angle_y)
 {
     (void)angle_y;
 #ifdef TGL_WASM_GAME
+    extern volatile int tgl_multitex_tris;   /* diagnostic (ztriangle.c) */
+    tgl_multitex_tris = 0;
     uint32_t len = glcmd_frame_len();
     if (len) {
         glcmd_replay(glcmd_frame_buf(), len);
@@ -598,6 +600,10 @@ void tinygl_render_task(void *arg)
                 ESP_LOGI(TAG, "=== BENCHMARK RESULT ===");
                 ESP_LOGI(TAG, "Frames: %d in %.2f sec = %.1f FPS (core %d)",
                          frame_count, (float)elapsed_us / 1000000.0f, fps, xPortGetCoreID());
+#ifdef TGL_WASM_GAME
+                extern volatile int tgl_multitex_tris;
+                ESP_LOGI(TAG, "multitex tris/frame avg: %d", tgl_multitex_tris / (frame_count ? frame_count : 1));
+#endif
                 ESP_LOGI(TAG, "=========================");
             }
             frame_count = 0;

@@ -160,12 +160,11 @@ static void draw_metal_cube(float hs)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.4f, 0.4f, 0.4f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.6f, 0.6f, 0.6f, 1.0f);
     /* Reflection environment offset computed from the CAMERA yaw (s_angle)
-     * relative to the SKYBOX yaw (s_sky_angle): one full texture cycle per
-     * revolution of the relative angle, so the reflection tracks what the
-     * camera actually sees of the rotating environment. */
-    glTexOffset(GL_TEXTURE1, (s_angle - s_sky_angle) / 360.0f, s_scroll_v);
+     * relative to the SKYBOX yaw (s_sky_angle), scaled so the flow is clearly
+     * visible (a few texels per frame). */
+    glTexOffset(GL_TEXTURE1, 3.0f * (s_angle - s_sky_angle) / 360.0f, s_scroll_v);
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);

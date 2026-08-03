@@ -45,6 +45,9 @@ static inline PIXEL tgl_multitex_sample_prepared(
     return result;
 }
 
+/* Diagnostic: count of triangles rasterized with multi-texture active (core 1). */
+volatile int tgl_multitex_tris = 0;
+
 
 
 
@@ -455,6 +458,7 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 			tgl_n_extra++;                                                                                  \
 		}                                                                                                 \
 		multitex_active = (tgl_n_extra > 0);                                                              \
+		if (multitex_active) tgl_multitex_tris++;                                                        \
 	}
 #if TGL_FEATURE_LIT_TEXTURES == 1
 #define OR1OG1OB1DECL                                                                                                                                          \
@@ -558,6 +562,7 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 			tgl_n_extra++;                                                                                  \
 		}                                                                                                 \
 		multitex_active = (tgl_n_extra > 0);                                                              \
+		if (multitex_active) tgl_multitex_tris++;                                                        \
 	}
 #if TGL_FEATURE_LIT_TEXTURES == 1
 #define OR1OG1OB1DECL                                                                                                                                          \
@@ -663,6 +668,7 @@ void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferP
 			tgl_n_extra++;                                                                                  \
 		}                                                                                                 \
 		multitex_active = (tgl_n_extra > 0);                                                              \
+		if (multitex_active) tgl_multitex_tris++;                                                        \
 	}
 #if TGL_FEATURE_LIT_TEXTURES == 1
 #define OR1OG1OB1DECL                                                                                                                                          \
