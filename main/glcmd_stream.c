@@ -1,9 +1,11 @@
 /**
- * TinyGL GL command stream — wasm3 → native bridge.
+ * TinyGL GL command stream — wasm → native bridge.
  *
- * Core 0 (wasm3 game) encodes GL calls into a per-frame buffer; core 1 drains
- * and replays them against the real TinyGL context. This makes the wasm the
- * sole author of every rendered scene.
+ * N-buffer zero-copy ping-pong: core 0 (wasm game) encodes GL calls into one
+ * of N frame buffers; core 1 drains and replays them against the real TinyGL
+ * context. Producer and consumer each own their own index, so no lock is
+ * needed and there is no per-frame memcpy. This makes the wasm the sole author
+ * of every rendered scene.
  */
 #include "glcmd_stream.h"
 #include "GL/gl.h"
@@ -13,33 +15,35 @@
 
 /* ── Encoder (core 0) ───────────────────────────────────── */
 
-static uint8_t s_buf[GLCMD_BUFFER_SIZE];
+/* N buffers; producer (core 0) and consumer (core 1) each own their own
+ * index, so no lock is needed. s_len[i]==0 → buffer free for the producer. */
+static uint8_t s_buf[GLCMD_NUM_BUFFERS][GLCMD_BUFFER_SIZE];
+static volatile uint32_t s_len[GLCMD_NUM_BUFFERS];
 static uint32_t s_pos = 0;
+static uint32_t s_enc_idx = 0;   /* written only by core 0 */
+static uint32_t s_dec_idx = 0;   /* written only by core 1 */
 
-/* Published frame (latest-wins single slot) consumed by core 1. */
-static uint8_t s_pub[GLCMD_BUFFER_SIZE];
-static volatile uint32_t s_pub_len = 0;
-
-void glcmd_begin_frame(void) { s_pos = 0; }
+void glcmd_begin_frame(void)
+{
+    /* Steady state (30fps lockstep): already drained → no spin. */
+    while (s_len[s_enc_idx] != 0) { }
+    s_pos = 0;
+}
 
 void glcmd_publish(void)
 {
-    memcpy(s_pub, s_buf, s_pos);
-    __sync_synchronize();
-    s_pub_len = s_pos;
+    s_len[s_enc_idx] = s_pos;
+    __sync_synchronize();              /* make frame data visible to core 1 */
+    s_enc_idx = (s_enc_idx + 1) % GLCMD_NUM_BUFFERS;
 }
 
-uint32_t glcmd_frame_len(void) { return s_pub_len; }
-const uint8_t *glcmd_frame_buf(void) { return s_pub; }
-void glcmd_frame_clear(void) { s_pub_len = 0; }
-
 bool glcmd_u8(uint8_t v) {
-    if (s_pos < GLCMD_BUFFER_SIZE) { s_buf[s_pos++] = v; return true; }
+    if (s_pos < GLCMD_BUFFER_SIZE) { s_buf[s_enc_idx][s_pos++] = v; return true; }
     return false;
 }
 
 bool glcmd_u32(uint32_t v) {
-    if (s_pos + 4 <= GLCMD_BUFFER_SIZE) { memcpy(s_buf + s_pos, &v, 4); s_pos += 4; return true; }
+    if (s_pos + 4 <= GLCMD_BUFFER_SIZE) { memcpy(s_buf[s_enc_idx] + s_pos, &v, 4); s_pos += 4; return true; }
     return false;
 }
 
@@ -47,6 +51,23 @@ bool glcmd_f32(float v) {
     uint32_t r;
     memcpy(&r, &v, 4);
     return glcmd_u32(r);
+}
+
+/* ── Decoder (core 1) ───────────────────────────────────── */
+
+const uint8_t *glcmd_frame_poll(uint32_t *out_len)
+{
+    uint32_t len = s_len[s_dec_idx];
+    if (!len) return NULL;
+    *out_len = len;
+    return s_buf[s_dec_idx];
+}
+
+void glcmd_frame_release(void)
+{
+    s_len[s_dec_idx] = 0;
+    __sync_synchronize();
+    s_dec_idx = (s_dec_idx + 1) % GLCMD_NUM_BUFFERS;
 }
 
 /* Read helpers — advance p, return value */

@@ -466,10 +466,11 @@ void render_frame(float angle_y)
     extern volatile int tgl_dbg_addmode;
     tgl_multitex_tris = 0;
     tgl_dbg_addmode = 0;
-    uint32_t len = glcmd_frame_len();
-    if (len) {
-        glcmd_replay(glcmd_frame_buf(), len);
-        glcmd_frame_clear();
+    uint32_t len;
+    const uint8_t *buf = glcmd_frame_poll(&len);
+    if (buf) {
+        glcmd_replay(buf, len);
+        glcmd_frame_release();
     }
 #else
     /* Non-wasm fallback: native scene queue on the clear color. */

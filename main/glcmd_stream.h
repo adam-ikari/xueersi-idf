@@ -1,8 +1,8 @@
 /**
- * TinyGL GL command stream — wasm3 → native bridge.
+ * TinyGL GL command stream — wasm → native bridge.
  *
- * The wasm3 game on core 0 calls GL API lookalikes (glBegin, glVertex3f, ...).
- * Each call is serialized into a byte stream by the wasm3 host wrappers. Core 1
+ * The wasm game on core 0 calls GL API lookalikes (glBegin, glVertex3f, ...).
+ * Each call is serialized into a byte stream by the wasm host wrappers. Core 1
  * drains the latest frame and replays the calls against the real TinyGL context.
  *
  * Command format: [opcode:1B] [payload:N bytes] (little-endian).
@@ -57,23 +57,26 @@ enum {
 /* ── Stream buffer ──────────────────────────────────────── */
 
 #define GLCMD_BUFFER_SIZE 8192  /* 8 KB — one frame of GL calls */
+/* Number of ping-pong frame buffers (2 = paced, 3 = extra jitter slack). */
+#define GLCMD_NUM_BUFFERS 2
 
-/* ── Encoder (wasm3 host side, core 0) ──────────────────── */
+/* ── Encoder (wasm host side, core 0) ──────────────────── */
 
-void glcmd_begin_frame(void);
+void glcmd_begin_frame(void);          /* wait for a free buffer, reset pos */
+void glcmd_publish(void);              /* publish current buffer, advance */
 bool glcmd_u8(uint8_t v);
 bool glcmd_u32(uint32_t v);
 bool glcmd_f32(float v);
 
-/** Publish the accumulated frame to core 1 (single-slot latest-wins). */
-void glcmd_publish(void);
-/** Length of the latest published frame (0 = none). */
-uint32_t glcmd_frame_len(void);
-const uint8_t *glcmd_frame_buf(void);
-/** Mark the current frame consumed (core 1). */
-void glcmd_frame_clear(void);
-
 /* ── Decoder (native side, core 1) ──────────────────────── */
+
+/** Poll the next unconsumed frame (zero-copy; buffer owned by core 0 until
+ *  release). Returns NULL if this cycle's buffer has no frame.
+ *  @param out_len  Receives the frame length in bytes.
+ *  @return Pointer to the frame, or NULL. */
+const uint8_t *glcmd_frame_poll(uint32_t *out_len);
+/** Mark the polled frame consumed and advance to the next buffer (core 1). */
+void glcmd_frame_release(void);
 
 /** Replay a GL command stream against the active TinyGL context.
  *  @param buf   Pointer to byte stream.
