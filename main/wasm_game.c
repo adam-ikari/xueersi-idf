@@ -161,6 +161,7 @@ void wasm_game_task(void *arg)
         if (!wasm_runtime_call_wasm(env, fn, 0, NULL)) {
             const char *e = wasm_runtime_get_exception(inst);
             ESP_LOGE(TAG, "iter %d: %s", n, e ? e : "unknown");
+            wasm_runtime_clear_exception(inst);
             vTaskDelay(pdMS_TO_TICKS(1000));
             continue;
         }
