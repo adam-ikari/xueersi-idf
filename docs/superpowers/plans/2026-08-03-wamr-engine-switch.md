@@ -655,105 +655,29 @@ git commit -m "feat(display): N-framebuffer pipeline + post-process hook, SRAM-f
 
 ---
 
-### Task 4: mem_mgr 组件化 + 收尾
+### Task 4: 收尾 + 内存占位验证（mem_mgr 已删除）
+
+> 决策：mem_mgr 组件已删除（YAGNI）——WAMR→PSRAM 由 `wasm_game.c` 内联分配器实现（Task 1），图形→SRAM 由 `display_st7735.c`（fb）+ `gl_malloc`（zbuf）实现（Task 3）。内存策略已落地，无需集中管理器。Task 4 只做内存占位验证 + 收尾。
 
 **Files:**
-- Create: `main/mem_mgr.h`, `main/mem_mgr.c`
-- Modify: `main/CMakeLists.txt`（SRCS 加 `mem_mgr.c`）
-- Modify: `main/wasm_game.c`（分配器改用 `mem_bulk_alloc`）
+- Modify: `main/wasm_game.c`（加一行内存占位日志）
 - Modify: `.superpowers/sdd/progress.md`
 
 **Interfaces:**
-- Produces:
-  - `void *mem_hot_alloc(size_t size)` → SRAM（`MALLOC_CAP_INTERNAL|8BIT`），预算记账
-  - `void *mem_bulk_alloc(size_t size)` → PSRAM（`MALLOC_CAP_SPIRAM|8BIT`），预算记账
-  - `void *mem_bulk_realloc(void *ptr, size_t size)` / `void mem_bulk_free(void *ptr)`
-  - `void mem_mgr_dump(void)` → 打印各池已分配/预算
+- Consumes: Task 1 的 `wasm_game_task`（`esp_heap_caps.h` 已 include）
+- Produces: 启动日志确认 WAMR 走 PSRAM、SRAM 余量
 
-- [ ] **Step 1: 新建 `main/mem_mgr.h`**
+- [ ] **Step 1: `main/wasm_game.c` 加内存占位日志**
 
+在 `wasm_runtime_full_init(&init_args)` 成功后、`ESP_LOGI(TAG, "Host GL functions linked ...")` 附近加一行：
 ```c
-#pragma once
-#include <stddef.h>
-/* Device memory manager — routes allocations by "hotness" intent.
- * SRAM (hot, graphics engine) is budget-limited; PSRAM (bulk) is plentiful.
- * The wasm game never sees this — it only uses standard wasm memory. */
-void *mem_hot_alloc(size_t size);
-void *mem_bulk_alloc(size_t size);
-void *mem_bulk_realloc(void *ptr, size_t size);
-void  mem_bulk_free(void *ptr);
-void  mem_mgr_dump(void);
+    ESP_LOGI(TAG, "heap: internal_free=%u psram_free=%u (WAMR runtime→PSRAM allocator)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 ```
+（`heap_caps_get_free_size` 来自 `esp_heap_caps.h`，文件已 include。）
 
-- [ ] **Step 2: 新建 `main/mem_mgr.c`**
-
-```c
-#include "mem_mgr.h"
-#include "esp_heap_caps.h"
-#include "esp_log.h"
-#include <stdint.h>
-
-static const char *TAG = "mem_mgr";
-
-/* SRAM hot budget (bytes). Graphics engine consumes ~176KB; remaining ~40KB
- * is the budget for other hot allocations. */
-#define MEM_SRAM_HOT_BUDGET (40 * 1024)
-
-static volatile size_t s_sram_hot_used = 0;
-static volatile size_t s_psram_used    = 0;
-
-void *mem_hot_alloc(size_t size)
-{
-    void *p = heap_caps_malloc(size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (p) {
-        size_t u = s_sram_hot_used + size;
-        if (u <= MEM_SRAM_HOT_BUDGET) s_sram_hot_used = u;
-        else ESP_LOGW(TAG, "hot budget exceeded: %u > %u", (unsigned)u, (unsigned)MEM_SRAM_HOT_BUDGET);
-    }
-    return p;
-}
-
-void *mem_bulk_alloc(size_t size)
-{
-    void *p = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (p) s_psram_used += size;
-    return p;
-}
-
-void *mem_bulk_realloc(void *ptr, size_t size)
-{
-    void *p = heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (p) s_psram_used += size;   /* approximate (no shrink tracking) */
-    return p;
-}
-
-void mem_bulk_free(void *ptr) { heap_caps_free(ptr); }
-
-void mem_mgr_dump(void)
-{
-    ESP_LOGI(TAG, "sram_hot=%u/%u  psram=%u",
-             (unsigned)s_sram_hot_used, (unsigned)MEM_SRAM_HOT_BUDGET, (unsigned)s_psram_used);
-}
-```
-
-- [ ] **Step 3: `main/wasm_game.c` 分配器改用 mem_mgr**
-
-把 `wamr_malloc/wamr_realloc/wamr_free` 改为调用 mem_mgr：
-```c
-#include "mem_mgr.h"
-static void *wamr_malloc(size_t size)   { return mem_bulk_alloc(size); }
-static void *wamr_realloc(void *ptr, size_t size) { return mem_bulk_realloc(ptr, size); }
-static void  wamr_free(void *ptr)       { mem_bulk_free(ptr); }
-```
-
-- [ ] **Step 4: `main/CMakeLists.txt` SRCS 加 `"mem_mgr.c"`**
-
-- [ ] **Step 5: 构建 + 硬件验证**
-
-Run: `idf.py build`
-烧录后 `mem_mgr` 日志（可在 `wasm_game_task` 里 `mem_mgr_dump()` 打印一次）确认 WAMR 分配走 PSRAM、SRAM 余量充足。游戏正常。
-
-- [ ] **Step 6: 更新 `.superpowers/sdd/progress.md`**
+- [ ] **Step 2: 更新 `.superpowers/sdd/progress.md`**
 
 追加：
 ```markdown
@@ -761,16 +685,20 @@ Run: `idf.py build`
   - WAMR fast interp（有界原生栈）跑同一份 wasm_game.wasm，22 个 GL 原生 → glcmd_stream，渲染零改动
   - glcmd N 缓冲（2/3 可配）零拷贝 ping-pong + paced，省每帧 memcpy
   - 显示 N 帧缓冲流水线（默认 3）+ 过去帧 + 后处理 no-op 钩子
-  - mem_mgr：图形引擎 SRAM 优先，WAMR 全 PSRAM
+  - 内存：WAMR→PSRAM（wasm_game.c 内联分配器），图形→SRAM（fb/zbuf/glcmd），纹理→flash；mem_mgr 组件删除（YAGNI）
   - 删 wasm3 组件 + 还原 128KB PSRAM 栈 hack
   - 待办：金属立方体反光无效果（独立渲染问题，继续排查）
 ```
 
-- [ ] **Step 7: 全量验证 + Commit**
+- [ ] **Step 3: 构建 + 硬件验证**
 
-Run: `idf.py build`（干净）+ 烧录确认 30fps 场景正常、日志符合预期。
+Run: `idf.py build`
+烧录后 `wasm_game: heap: internal_free=... psram_free=...` 日志确认 WAMR 分配走 PSRAM、SRAM 余量充足，游戏 30fps 正常。
+
+- [ ] **Step 4: Commit**
+
 ```bash
-git add -A && git commit -m "refactor(mem): mem_mgr hot/bulk allocator, WAMR→PSRAM"
+git add -A && git commit -m "docs: progress + wasm_game memory-placement log (mem_mgr dropped)"
 ```
 
 ---
@@ -784,7 +712,7 @@ git add -A && git commit -m "refactor(mem): mem_mgr hot/bulk allocator, WAMR→P
 | §2 N 缓冲零拷贝 paced 同步 | Task 2 |
 | §3 N-fb 显示流水线 + 过去帧 + 后处理 no-op | Task 3 |
 | §3 TinyGL pbuf 切换 | Task 3 Step 3 |
-| §4 mem_mgr（WAMR→PSRAM、图形→SRAM） | Task 4 |
+| §4 内存（WAMR→PSRAM 内联分配器、图形→SRAM；mem_mgr 删除） | Task 1/3 + Task 4 验证 |
 | §4 纹理 flash / 不缓存 | 不做（保持现状） |
 | §5 清理（删 wasm3、还原栈、删配置） | Task 1 Step 3–6 |
 | 明确不做：脏矩形、LLM、后处理效果、纹理缓存、金属反光 | 均不实现 |
