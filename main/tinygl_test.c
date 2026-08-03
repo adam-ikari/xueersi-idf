@@ -38,13 +38,12 @@
 #include "glcmd_stream.h"
 
 #ifdef TGL_WASM_GAME
-#include "wasm3_game.h"
+#include "wasm_game.h"
 #endif
 
 #ifndef TGL_EMU_BUILD
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #else
@@ -57,19 +56,6 @@
 #include <stdlib.h>
 
 static const char *TAG = "tinygl";
-
-#if defined(TGL_WASM_GAME) && !defined(TGL_EMU_BUILD)
-/* wasm3's threaded-code interpreter is compiled WITHOUT tail-call optimization
- * on xtensa GCC (no __has_attribute(musttail)), so its native stack grows
- * ~20 B per WASM opcode executed and only unwinds when the top-level
- * m3_CallV() returns. The scene emits ~2200 ops per game_update → needs ~44 KB;
- * 32 KB previously overflowed. The stack is therefore allocated from PSRAM
- * (128 KB) with CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM enabled.
- * Units: xTaskCreateStatic* usStackDepth is in StackType_t words. */
-#define WASM3_GAME_STACK_BYTES (128 * 1024)
-static StaticTask_t s_wasm3_tcb;
-static StackType_t *s_wasm3_stack = NULL;
-#endif /* TGL_WASM_GAME && !TGL_EMU_BUILD */
 
 /* Pause flag for the debug console: when non-zero, the render loop skips
  * rendering+flush so debug commands can write the framebuffer and flush
@@ -653,21 +639,15 @@ void *tinygl_benchmark(void *arg)
 
 #ifdef TGL_WASM_GAME
     /* Core 0: wasm game task — the sole author of the scene via GL commands.
-     * Stack is PSRAM-backed (see WASM3_GAME_STACK_BYTES above): 128 KB so the
-     * per-opcode interpreter nesting (~44 KB for the current scene) has room. */
-    s_wasm3_stack = heap_caps_malloc(WASM3_GAME_STACK_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (s_wasm3_stack == NULL) {
-        ESP_LOGE(TAG, "wasm3_game: PSRAM stack alloc of %d bytes failed", WASM3_GAME_STACK_BYTES);
-        return NULL;
-    }
-    xTaskCreateStaticPinnedToCore(
-        wasm3_game_task,
-        "wasm3_game",
-        WASM3_GAME_STACK_BYTES / sizeof(StackType_t),
+     * WAMR fast interpreter has a bounded native stack (no per-opcode growth
+     * like wasm3), so a plain 32KB SRAM stack suffices. */
+    xTaskCreatePinnedToCore(
+        wasm_game_task,
+        "wasm_game",
+        32768,
         NULL,
         configMAX_PRIORITIES - 2,
-        s_wasm3_stack,
-        &s_wasm3_tcb,
+        NULL,
         0                           /* core 0 */
     );
 #else

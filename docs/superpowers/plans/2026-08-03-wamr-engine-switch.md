@@ -254,8 +254,10 @@ void wasm_game_task(void *arg)
 
 - [ ] **Step 6: 删除旧文件**
 
+注意：旧的 `main/wasm_game.c`（未编译的 WAMR 示例）会被 Step 2 新建的同名文件**覆盖**——它是死代码，无需单独删。只删 wasm3 相关：
+
 ```bash
-git rm main/wasm3_game.c main/wasm3_game.h main/wasm_game.c
+git rm main/wasm3_game.c main/wasm3_game.h
 rm -rf components/wasm3
 ```
 

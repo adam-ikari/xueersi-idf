@@ -18,11 +18,6 @@ CONFIG_SPIRAM_SPEED_80M=y
 CONFIG_SPIRAM_SPEED=80
 CONFIG_SPIRAM_OCCUPY_VSPI_HOST=y
 CONFIG_SPIRAM_USE_MALLOC=y
-# wasm3's threaded-code interpreter is compiled without tail-call optimization on
-# xtensa GCC, so its native stack grows ~20 B per WASM opcode executed. The game
-# scene (~2200 ops/game_update) needs a ~44 KB stack, far larger than internal
-# RAM can spare — allocate the wasm3_game task stack from PSRAM instead.
-CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y
 CONFIG_SPI_MASTER_IN_IRAM=y
 CONFIG_SPI_MASTER_ISR_IN_IRAM=y
 CONFIG_SDL_BSP_XIAOMIAO=y
