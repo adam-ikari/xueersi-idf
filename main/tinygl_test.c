@@ -35,6 +35,7 @@
 #include "texture_reflect.h"
 #include "tinygl_physics.h"
 #include "render_queue.h"
+#include "glcmd_stream.h"
 
 #ifdef TGL_WASM_GAME
 #include "wasm3_game.h"
@@ -510,36 +511,31 @@ static void render_cmd_draw(const render_cmd_t *cmd)
 }
 
 /* ── Render one frame (core 1) ───────────────────────────
- * Skybox is fixed; scene geometry comes from the render queue
- * (populated by core 0 physics/game logic task). */
+ * In the wasm build, core 0 (wasm game) is the sole author of every rendered
+ * scene: it submits GL commands (single-slot latest-wins) and core 1 replays
+ * them here. If core 1 can't keep up, older frames are dropped. */
 void render_frame(float angle_y)
 {
+    (void)angle_y;
+#ifdef TGL_WASM_GAME
+    uint32_t len = glcmd_frame_len();
+    if (len) {
+        glcmd_replay(glcmd_frame_buf(), len);
+        glcmd_frame_clear();
+    }
+#else
+    /* Non-wasm fallback: native skybox + scene queue. */
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-    /* ── Skybox ── centred on camera (rotation only, no translation). */
     glLoadIdentity();
     glRotatef(25, 1, 0, 0);
     glRotatef(angle_y, 0, 1, 0);
     draw_skybox();
-
-    /* ── Scene ── translate camera back, then rotate. */
     glLoadIdentity();
     glTranslatef(0, 0, -3.5f);
     glRotatef(25, 1, 0, 0);
     glRotatef(angle_y, 0, 1, 0);
-
-    /* Metal cube — 3-layer additive multi-texture (metal + reflection + specular). */
-    draw_metal_cube(0.0f, 0.0f, 0.0f, 1.6f, 0.0f, angle_y);
-
-    /* Reset units 1+ to REPLACE so the queue cubes aren't multi-textured. */
-    glActiveTexture(GL_TEXTURE1);
-    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-    glActiveTexture(GL_TEXTURE2);
-    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-    glActiveTexture(GL_TEXTURE0);
-
-    /* Drain the render queue — all draw calls are issued by core 0. */
     render_queue_drain(render_cmd_draw);
+#endif
 
     gl_flush_to_display();
 }
@@ -689,19 +685,32 @@ void *tinygl_benchmark(void *arg)
         return NULL;
     }
 
-    physics_init();
     ESP_LOGI(TAG, "Starting dual-core: scene on core 0, render on core 1");
 
-    /* Create scene task on core 0 (physics + model placement) */
+#ifdef TGL_WASM_GAME
+    /* Core 0: wasm game task — the sole author of the scene via GL commands. */
+    xTaskCreatePinnedToCore(
+        wasm3_game_task,
+        "wasm3_game",
+        16384,      /* 16KB stack */
+        NULL,
+        configMAX_PRIORITIES - 2,
+        NULL,
+        0                           /* core 0 */
+    );
+#else
+    /* No WASM: native scene task on core 0 */
+    physics_init();
     xTaskCreatePinnedToCore(
         tinygl_scene_task,
         "scene",
         4096,
         NULL,
-        configMAX_PRIORITIES - 2,   /* slightly lower than render */
+        configMAX_PRIORITIES - 2,
         NULL,
         0                           /* core 0 */
     );
+#endif
 
     /* Create render task on core 1 (30 FPS) */
     xTaskCreatePinnedToCore(
@@ -713,36 +722,6 @@ void *tinygl_benchmark(void *arg)
         NULL,
         1                           /* core 1 */
     );
-
-    /* Core 0: WASM3 game task or native scene task */
-#ifdef TGL_WASM_GAME
-    /* WASM3 game task on core 0 — wasm game logic + physics */
-    xTaskCreatePinnedToCore(
-        wasm3_game_task,
-        "wasm3_game",
-        16384,      /* 16KB stack */
-        NULL,
-        configMAX_PRIORITIES - 2,
-        NULL,
-        0
-    );
-#else
-    /* No WASM: create native scene task on core 0 */
-    xTaskCreatePinnedToCore(
-        tinygl_scene_task,
-        "scene",
-        4096,
-        NULL,
-        configMAX_PRIORITIES - 2,
-        NULL,
-        0
-    );
-
-    /* Core 0: idle */
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-    }
-#endif
 
     return NULL;
 }
