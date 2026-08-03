@@ -3,7 +3,8 @@
  *
  * The wasm game on core 0 calls GL API lookalikes (glBegin, glVertex3f, ...).
  * Each call is serialized into a byte stream by the wasm host wrappers. Core 1
- * drains the latest frame and replays the calls against the real TinyGL context.
+ * drains each published frame and replays the calls against the real TinyGL
+ * context (N-buffer zero-copy ping-pong; paced, no frame dropping).
  *
  * Command format: [opcode:1B] [payload:N bytes] (little-endian).
  */

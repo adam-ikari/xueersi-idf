@@ -32,8 +32,8 @@ void glcmd_begin_frame(void)
 
 void glcmd_publish(void)
 {
+    __sync_synchronize();              /* release: frame data visible before flag */
     s_len[s_enc_idx] = s_pos;
-    __sync_synchronize();              /* make frame data visible to core 1 */
     s_enc_idx = (s_enc_idx + 1) % GLCMD_NUM_BUFFERS;
 }
 
@@ -65,8 +65,8 @@ const uint8_t *glcmd_frame_poll(uint32_t *out_len)
 
 void glcmd_frame_release(void)
 {
+    __sync_synchronize();              /* release: replay reads done before clear */
     s_len[s_dec_idx] = 0;
-    __sync_synchronize();
     s_dec_idx = (s_dec_idx + 1) % GLCMD_NUM_BUFFERS;
 }
 

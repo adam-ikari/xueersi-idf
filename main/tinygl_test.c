@@ -456,8 +456,9 @@ static void render_cmd_draw(const render_cmd_t *cmd)
 
 /* ── Render one frame (core 1) ───────────────────────────
  * In the wasm build, core 0 (wasm game) is the sole author of every rendered
- * scene: it submits GL commands (single-slot latest-wins) and core 1 replays
- * them here. If core 1 can't keep up, older frames are dropped. */
+ * scene: it submits GL commands into an N-buffer zero-copy ping-pong and core 1
+ * replays them here. Frames are paced — a slow consumer stalls the encoder
+ * rather than dropping frames. */
 void render_frame(float angle_y)
 {
     (void)angle_y;
