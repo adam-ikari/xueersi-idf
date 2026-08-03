@@ -136,8 +136,10 @@ static void draw_skybox(void)
     glDisable(GL_LIGHTING);
     glDisable(GL_CULL_FACE);
 
-    /* +X */ skybox_face( s,-s,-s,  0, 2*s, 0,  0, 0, 2*s, TEX_HORIZON);
-    /* -X */ skybox_face(-s,-s, s,  0, 2*s, 0,  0, 0,-2*s, TEX_HORIZON);
+    /* Each side face maps texture v along the WORLD Y (up), so the horizon's
+     * sand sits at the face bottom and sky at the top. */
+    /* +X */ skybox_face( s,-s,-s,  0, 0, 2*s,  0, 2*s, 0, TEX_HORIZON);
+    /* -X */ skybox_face(-s,-s, s,  0, 0,-2*s,  0, 2*s, 0, TEX_HORIZON);
     /* +Y */ skybox_face(-s, s, s,  2*s, 0, 0,  0, 0,-2*s, TEX_SKY);
     /* -Y */ skybox_face(-s,-s,-s,  2*s, 0, 0,  0, 0, 2*s, TEX_SAND);
     /* +Z */ skybox_face(-s,-s, s,  2*s, 0, 0,  0, 2*s, 0,  TEX_HORIZON);
@@ -158,13 +160,13 @@ static void draw_metal_cube(float hs)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.5f, 0.5f, 0.5f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.7f, 0.7f, 0.7f, 1.0f);
     glTexOffset(GL_TEXTURE1, s_scroll_u, s_scroll_v);
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.35f, 0.35f, 0.35f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.5f, 0.5f, 0.5f, 1.0f);
 
     glActiveTexture(GL_TEXTURE0);
     glPushMatrix();
@@ -215,17 +217,8 @@ extern "C" void game_update(void)
     glRotatef(25, 1, 0, 0);
     glRotatef(s_angle, 0, 1, 0);
 
-    /* Metal cube */
+    /* Metal cube (the scene's only object) */
     draw_metal_cube(0.8f);
-
-    /* Small checker cube below */
-    glBindTexture(GL_TEXTURE_2D, TEX_CHECKER);
-    glPushMatrix();
-    glTranslatef(0, -2, 0);
-    glRotatef(s_angle * 0.5f, 1, 0, 0);
-    glRotatef(s_angle * 0.3f, 0, 1, 0);
-    cube(0.5f);
-    glPopMatrix();
 
     glFlush();
 }
