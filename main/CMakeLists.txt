@@ -42,16 +42,25 @@ if(CONFIG_XIAOMIAO_USE_SDL)
     target_sources(${COMPONENT_LIB} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdl_demo.c)
 endif()
 
-# Generate WASM bytecode from WAT (WebAssembly Text) at compile time.
-# wat2wasm must be installed (brew install wabt or apt install wabt).
-find_program(WAT2WASM wat2wasm)
-if(WAT2WASM)
-    set(WASM_SRC  ${CMAKE_CURRENT_SOURCE_DIR}/wasm_game.wat)
+# Generate WASM bytecode from wasm_game.cpp (C++ → wasm32) at compile time.
+# clang++ with the wasm32 target must be installed.
+find_program(CLANGXX clang++)
+if(CLANGXX)
+    set(WASM_SRC  ${CMAKE_CURRENT_SOURCE_DIR}/wasm_game.cpp)
+    set(WASM_OBJ  ${CMAKE_CURRENT_BINARY_DIR}/wasm_game.o)
     set(WASM_FILE ${CMAKE_CURRENT_BINARY_DIR}/wasm_game.wasm)
     add_custom_command(
-        OUTPUT ${WASM_FILE}
-        COMMAND ${WAT2WASM} ${WASM_SRC} -o ${WASM_FILE}
+        OUTPUT ${WASM_OBJ}
+        COMMAND ${CLANGXX} --target=wasm32 -O3 -nostdlib -c ${WASM_SRC} -o ${WASM_OBJ}
         DEPENDS ${WASM_SRC}
+        VERBATIM
+    )
+    find_program(WASMLD wasm-ld)
+    add_custom_command(
+        OUTPUT ${WASM_FILE}
+        COMMAND ${WASMLD} --no-entry --export-all --allow-undefined
+                --initial-memory=131072 --max-memory=131072 ${WASM_OBJ} -o ${WASM_FILE}
+        DEPENDS ${WASM_OBJ}
         VERBATIM
     )
     # Generate C header embedding the WASM bytecode

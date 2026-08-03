@@ -323,62 +323,6 @@ static void draw_metal_cube(float x, float y, float z, float size,
     glPopMatrix();
 }
 
-/* ── Skybox: large cube viewed from inside, subdivided faces ──────────
- * Drawn first with depth-write off so scene geometry draws over it.
- * Each face is subdivided into NxN quads to reduce texture distortion. */
-static int tinygl_skybox_enabled = 1;
-static void draw_skybox_face(float x0, float y0, float z0,
-                             float ax, float ay, float az,
-                             float bx, float by, float bz,
-                             int subdiv, GLuint tex_id)
-{
-    glBindTexture(GL_TEXTURE_2D, tex_id);
-    float step = 1.0f / (float)subdiv;
-    for (int i = 0; i < subdiv; i++) {
-        for (int j = 0; j < subdiv; j++) {
-            float u0 = i * step, u1 = (i + 1) * step;
-            float v0 = j * step, v1 = (j + 1) * step;
-            glBegin(GL_QUADS);
-            glTexCoord2f(u0, v0); glVertex3f(x0 + ax*u0 + bx*v0, y0 + ay*u0 + by*v0, z0 + az*u0 + bz*v0);
-            glTexCoord2f(u1, v0); glVertex3f(x0 + ax*u1 + bx*v0, y0 + ay*u1 + by*v0, z0 + az*u1 + bz*v0);
-            glTexCoord2f(u1, v1); glVertex3f(x0 + ax*u1 + bx*v1, y0 + ay*u1 + by*v1, z0 + az*u1 + bz*v1);
-            glTexCoord2f(u0, v1); glVertex3f(x0 + ax*u0 + bx*v1, y0 + ay*u0 + by*v1, z0 + az*u0 + bz*v1);
-            glEnd();
-        }
-    }
-}
-
-static void draw_skybox(void)
-{
-    if (!tinygl_skybox_enabled) return;
-    float s = 15.0f;
-    int subdiv = 4;  /* 4x4 sub-quads per face */
-    glDepthMask(GL_FALSE);
-    glDisable(GL_LIGHTING);
-    glDisable(GL_CULL_FACE);
-
-    GLContext* c = gl_get_context();
-    c->use_affine_texture = 0;  /* perspective correction works fine on small quads */
-
-    /* +X face: x=s, yz plane, normal +X — horizon (sky above, sand below) */
-    draw_skybox_face( s, -s, -s,  0, s*2, 0,  0, 0, s*2,  subdiv, TEX_HORIZON);
-    /* -X face: x=-s, yz plane, normal -X */
-    draw_skybox_face(-s, -s,  s,  0, s*2, 0,  0, 0,-s*2,  subdiv, TEX_HORIZON);
-    /* +Y face: y=s, xz plane, normal +Y — blue sky + white clouds */
-    draw_skybox_face(-s,  s,  s,  s*2, 0, 0,  0, 0,-s*2,  subdiv, TEX_SKY);
-    /* -Y face: y=-s, xz plane, normal -Y — desert sand */
-    draw_skybox_face(-s, -s, -s,  s*2, 0, 0,  0, 0, s*2,  subdiv, TEX_SAND);
-    /* +Z face: z=s, xy plane, normal +Z — horizon */
-    draw_skybox_face(-s, -s,  s,  s*2, 0, 0,  0, s*2, 0,  subdiv, TEX_HORIZON);
-    /* -Z face: z=-s, xy plane, normal -Z — horizon */
-    draw_skybox_face( s, -s, -s, -s*2, 0, 0,  0, s*2, 0,  subdiv, TEX_HORIZON);
-
-    /* restore state for scene geometry */
-    glEnable(GL_CULL_FACE);
-    glEnable(GL_LIGHTING);
-    glDepthMask(GL_TRUE);
-}
-
 /* ── Ordered dithering (Bayer 4×4) for 16-bit color ────
  * Simulates higher color depth by spreading quantization error across
  * adjacent pixels. The 4×4 Bayer matrix adds a perceptually uniform
@@ -524,12 +468,8 @@ void render_frame(float angle_y)
         glcmd_frame_clear();
     }
 #else
-    /* Non-wasm fallback: native skybox + scene queue. */
+    /* Non-wasm fallback: native scene queue on the clear color. */
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glLoadIdentity();
-    glRotatef(25, 1, 0, 0);
-    glRotatef(angle_y, 0, 1, 0);
-    draw_skybox();
     glLoadIdentity();
     glTranslatef(0, 0, -3.5f);
     glRotatef(25, 1, 0, 0);
