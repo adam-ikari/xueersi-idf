@@ -90,11 +90,15 @@ static m3ApiRawFunction(host_glBindTexture) {
 }
 static m3ApiRawFunction(host_glActiveTexture) {
     m3ApiGetArg(int, unit);
+    static int dbg = 0;
+    if (dbg++ < 10) ESP_LOGI(TAG, "glActiveTexture unit=0x%x", unit);
     glcmd_u8(GLCMD_ACTIVE_TEXTURE); glcmd_u32((uint32_t)unit);
     m3ApiSuccess();
 }
 static m3ApiRawFunction(host_glTexEnvi) {
     m3ApiGetArg(int, target); m3ApiGetArg(int, pname); m3ApiGetArg(int, param);
+    static int dbg = 0;
+    if (dbg++ < 10) ESP_LOGI(TAG, "glTexEnvi t=0x%x p=0x%x v=0x%x", target, pname, param);
     glcmd_u8(GLCMD_TEX_ENVI); glcmd_u32((uint32_t)target); glcmd_u32((uint32_t)pname); glcmd_u32((uint32_t)param);
     m3ApiSuccess();
 }

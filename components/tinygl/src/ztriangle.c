@@ -47,6 +47,7 @@ static inline PIXEL tgl_multitex_sample_prepared(
 
 /* Diagnostic: count of triangles rasterized with multi-texture active (core 1). */
 volatile int tgl_multitex_tris = 0;
+volatile int tgl_dbg_addmode = 0;   /* any unit 1+ with env_mode==GL_ADD (diagnostic) */
 
 
 
@@ -446,6 +447,7 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 		tgl_n_extra = 0;                                                                                  \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
+			if (_u->env_mode == GL_ADD) tgl_dbg_addmode++;                                             \
 			if (_u->env_mode != GL_ADD || !_u->texture || !_u->texture->images[0].xsize) continue;          \
 			float _w = _u->env_color[0];                                                                   \
 			if (_w <= 0.0f) continue;                                                                      \
@@ -550,6 +552,7 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 		tgl_n_extra = 0;                                                                                  \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
+			if (_u->env_mode == GL_ADD) tgl_dbg_addmode++;                                             \
 			if (_u->env_mode != GL_ADD || !_u->texture || !_u->texture->images[0].xsize) continue;          \
 			float _w = _u->env_color[0];                                                                   \
 			if (_w <= 0.0f) continue;                                                                      \
@@ -656,6 +659,7 @@ void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferP
 		tgl_n_extra = 0;                                                                                  \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
+			if (_u->env_mode == GL_ADD) tgl_dbg_addmode++;                                             \
 			if (_u->env_mode != GL_ADD || !_u->texture || !_u->texture->images[0].xsize) continue;          \
 			float _w = _u->env_color[0];                                                                   \
 			if (_w <= 0.0f) continue;                                                                      \
