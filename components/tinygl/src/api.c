@@ -567,6 +567,16 @@ void glTexEnvfv(GLenum target, GLenum pname, const GLfloat *params) {
 	}
 }
 
+/* Set a texture unit's UV offset (texcoord scroll). Used for animated
+ * reflection overlays; the multitex blend adds this offset per pixel. */
+void glTexOffset(GLenum unit, GLfloat u, GLfloat v) {
+	GLContext *c = gl_get_context();
+	int idx = unit - GL_TEXTURE0;
+	if (idx < 0 || idx >= MAX_TEXTURE_UNITS) return;
+	c->tex_unit[idx].u_off = u;
+	c->tex_unit[idx].v_off = v;
+}
+
 void glTexParameteri(GLint target, GLint pname, GLint param) {
 
 #include "error_check_no_context.h"

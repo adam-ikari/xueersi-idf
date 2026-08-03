@@ -259,6 +259,8 @@ static void draw_textured_cube(float x, float y, float z, float size,
 static void draw_metal_cube(float x, float y, float z, float size,
                             float rx, float ry)
 {
+    static float s_scroll_u = 0.0f;   /* reflection scroll (flowing overlay) */
+    static float s_scroll_v = 0.0f;
     float s = size * 0.5f;
     glPushMatrix();
     glTranslatef(x, y, z);
@@ -271,12 +273,15 @@ static void draw_metal_cube(float x, float y, float z, float size,
     glBindTexture(GL_TEXTURE_2D, TEX_METAL);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 
-    /* Unit 1: desert reflection (ADD, weight 0.5) */
+    /* Unit 1: desert reflection (ADD, weight 0.5), scrolling overlay */
+    s_scroll_u += 0.002f;
+    s_scroll_v += 0.001f;
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
     glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR,
                (const GLfloat[]){0.5f, 0.5f, 0.5f, 1.0f});
+    glTexOffset(GL_TEXTURE1, s_scroll_u, s_scroll_v);
 
     /* Unit 2: specular highlight (ADD, weight 0.35) */
     glActiveTexture(GL_TEXTURE2);
