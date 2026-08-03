@@ -201,16 +201,18 @@ extern "C" void game_update(void)
 {
     s_angle += 2.0f;
     if (s_angle >= 360.0f) s_angle -= 360.0f;
-    s_scroll_u += 0.002f;
-    s_scroll_v += 0.001f;
+    /* Environment-map flow: scroll the reflection overlay each frame. */
+    s_scroll_u += 0.008f;
+    s_scroll_v += 0.004f;
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glMatrixMode(GL_MODELVIEW);
 
-    /* Skybox camera (rotation only) */
+    /* Skybox camera (rotation only) — rotates SLOWER than the scene so the
+     * environment visibly changes relative to the cube. */
     glLoadIdentity();
     glRotatef(25, 1, 0, 0);
-    glRotatef(s_angle, 0, 1, 0);
+    glRotatef(s_angle * 0.4f, 0, 1, 0);
     draw_skybox();
 
     /* Scene camera */
