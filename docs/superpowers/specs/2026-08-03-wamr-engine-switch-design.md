@@ -125,6 +125,7 @@ fb[2] ← 光栅器渲染最新帧
 **Flash**：纹理（10×48KB，已 30fps，保持 flash 采样）、代码、wasm 字节码。
 
 **`mem_mgr` 机制**（host 层组件）：
+- **已删除（实现时决策，YAGNI）**：内存路由由调用点内联完成——WAMR→PSRAM（`wasm_game.c` 内联分配器 + `wasm_runtime_full_init`），图形→SRAM（`display_st7735.c` fb + `gl_malloc` zbuf）。
 ```
 void *mem_hot_alloc(size);    // → SRAM（图形引擎）
 void *mem_bulk_alloc(size);   // → PSRAM（WAMR、大缓冲）
