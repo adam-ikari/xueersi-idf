@@ -635,7 +635,7 @@ __attribute__((weak)) void gl_post_process(uint16_t *fb, int w, int h)
     }
 ```
 
-注：`gl_flush_to_display()` → `s_display->flush()` DMA 当前渲染目标（即 `get_buffer()` 返回的缓冲）；旋转在 flush 内推进。
+注：`gl_flush_to_display()` → `s_display->flush()` DMA 当前渲染目标（即 `get_buffer()` 返回的缓冲）；旋转在 flush 内推进。\n**必须删除** `#endif` 之后原有的无条件 `gl_flush_to_display();`（否则每帧双次 DMA，第二次发送下一旋转缓冲的陈旧/黑屏内容）。
 
 - [ ] **Step 5: 构建验证**
 
