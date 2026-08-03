@@ -605,9 +605,8 @@ void tinygl_render_task(void *arg)
 #ifdef TGL_WASM_GAME
                 extern volatile int tgl_multitex_tris;
                 extern volatile int tgl_dbg_addmode;
-                ESP_LOGI(TAG, "multitex tris/frame avg: %d  (units-with-ADD-mode tris/frame: %d)",
-                         tgl_multitex_tris / (frame_count ? frame_count : 1),
-                         tgl_dbg_addmode / (frame_count ? frame_count : 1));
+                ESP_LOGI(TAG, "last-frame multitex tris: %d  (units-with-ADD-mode: %d)",
+                         tgl_multitex_tris, tgl_dbg_addmode);
 #endif
                 ESP_LOGI(TAG, "=========================");
             }

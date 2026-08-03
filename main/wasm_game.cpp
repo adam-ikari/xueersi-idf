@@ -160,7 +160,7 @@ static void draw_metal_cube(float hs)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.6f, 0.6f, 0.6f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.8f, 0.8f, 0.8f, 1.0f);
     /* Reflection environment offset computed from the CAMERA yaw (s_angle)
      * relative to the SKYBOX yaw (s_sky_angle), scaled so the flow is clearly
      * visible (a few texels per frame). */
@@ -169,15 +169,19 @@ static void draw_metal_cube(float hs)
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.8f, 0.8f, 0.8f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.9f, 0.9f, 0.9f, 1.0f);
 
     glActiveTexture(GL_TEXTURE0);
+    /* Lighting OFF so the reflection/specular layers aren't dimmed by shading —
+     * the multi-texture blend shows at full strength (a simulated reflection). */
+    glDisable(GL_LIGHTING);
     glPushMatrix();
     /* Tumble about two axes so all faces/reflection are visible. */
     glRotatef(s_angle, 0, 1, 0);
     glRotatef(s_angle * 0.6f, 1, 0, 0);
     cube(hs);
     glPopMatrix();
+    glEnable(GL_LIGHTING);
 
     /* Reset units 1+ to REPLACE so the small cube isn't multi-textured. */
     glActiveTexture(GL_TEXTURE1);
