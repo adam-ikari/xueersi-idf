@@ -118,11 +118,131 @@ def gen_grid(width: int, height: int) -> bytearray:
     return buf
 
 
+def gen_sky(width: int, height: int) -> bytearray:
+    """Clear blue sky: zenith-deep to horizon-light gradient with soft white clouds.
+
+    Used for the skybox top (+Y) face."""
+    buf = bytearray(width * height * 3)
+    clouds = [
+        (0.22, 0.30, 0.16, 0.22),
+        (0.60, 0.18, 0.20, 0.14),
+        (0.45, 0.55, 0.24, 0.16),
+        (0.80, 0.40, 0.14, 0.18),
+        (0.10, 0.70, 0.16, 0.12),
+        (0.38, 0.78, 0.18, 0.12),
+    ]
+    for y in range(height):
+        t = y / height
+        r = 70 + 60 * t
+        g = 120 + 60 * t
+        b = 190 + 40 * t
+        for x in range(width):
+            u = x / width
+            cloud = 0.0
+            for (cx, cy, rx, ry) in clouds:
+                dx = (u - cx) / rx
+                dy = (t - cy) / ry
+                d2 = dx * dx + dy * dy
+                if d2 < 1.0:
+                    cloud += (1.0 - d2) * (1.0 - d2)
+            if cloud > 1.0:
+                cloud = 1.0
+            cr = r + (255 - r) * cloud
+            cg = g + (255 - g) * cloud
+            cb = b + (255 - b) * cloud
+            i = (y * width + x) * 3
+            buf[i] = int(cr)
+            buf[i + 1] = int(cg)
+            buf[i + 2] = int(cb)
+    return buf
+
+
+def gen_sand(width: int, height: int) -> bytearray:
+    """Desert sand: warm tan with subtle horizontal dune ripples and speckle noise.
+
+    Used for the skybox bottom (-Y) face."""
+    buf = bytearray(width * height * 3)
+    base_r, base_g, base_b = 214, 182, 132
+    for y in range(height):
+        shade = 1.0 - 0.12 * (y / height)
+        ripple = ((y * 7) // 16) & 1
+        for x in range(width):
+            n = ((x * 13 + y * 29) & 15) - 8
+            r = int((base_r + ripple * 8 + n) * shade)
+            g = int((base_g + ripple * 6 + n) * shade)
+            b = int((base_b + ripple * 4 + n) * shade)
+            i = (y * width + x) * 3
+            buf[i] = max(0, min(255, r))
+            buf[i + 1] = max(0, min(255, g))
+            buf[i + 2] = max(0, min(255, b))
+    return buf
+
+
+def gen_horizon(width: int, height: int) -> bytearray:
+    """Desert horizon: sand below, blue sky with clouds above, soft transition.
+
+    Used for the four skybox side faces. Row 0 maps to the face bottom (v=0),
+    so the sand occupies the low rows and the sky the high rows."""
+    buf = bytearray(width * height * 3)
+    horizon = 0.45
+    band = 0.06
+    clouds = [
+        (0.25, 0.74, 0.16, 0.20),
+        (0.62, 0.60, 0.20, 0.14),
+        (0.48, 0.86, 0.18, 0.12),
+        (0.85, 0.70, 0.13, 0.16),
+        (0.12, 0.62, 0.15, 0.13),
+        (0.55, 0.52, 0.22, 0.10),
+    ]
+    for y in range(height):
+        v = y / height
+        for x in range(width):
+            u = x / width
+            if v < horizon - band:
+                n = ((x * 13 + y * 29) & 15) - 8
+                r, g, b = 214 + n, 182 + n, 132 + n
+            else:
+                t = (v - horizon) / (1.0 - horizon)
+                if t < 0.0:
+                    t = 0.0
+                sr = 70 + 60 * t
+                sg = 120 + 60 * t
+                sb = 190 + 40 * t
+                cloud = 0.0
+                for (cx, cy, rx, ry) in clouds:
+                    dx = (u - cx) / rx
+                    dy = (v - cy) / ry
+                    d2 = dx * dx + dy * dy
+                    if d2 < 1.0:
+                        cloud += (1.0 - d2) * (1.0 - d2)
+                if cloud > 1.0:
+                    cloud = 1.0
+                sr += (255 - sr) * cloud
+                sg += (255 - sg) * cloud
+                sb += (255 - sb) * cloud
+                if v < horizon + band:
+                    f = (v - (horizon - band)) / (2 * band)
+                    n = ((x * 13 + y * 29) & 15) - 8
+                    r = (214 + n) * (1 - f) + sr * f
+                    g = (182 + n) * (1 - f) + sg * f
+                    b = (132 + n) * (1 - f) + sb * f
+                else:
+                    r, g, b = sr, sg, sb
+            i = (y * width + x) * 3
+            buf[i] = max(0, min(255, int(r)))
+            buf[i + 1] = max(0, min(255, int(g)))
+            buf[i + 2] = max(0, min(255, int(b)))
+    return buf
+
+
 KINDS = {
     "ceramic": gen_ceramic,
     "checker": gen_checker,
     "brick":   gen_brick,
     "grid":    gen_grid,
+    "sky":     gen_sky,
+    "sand":    gen_sand,
+    "horizon": gen_horizon,
 }
 
 

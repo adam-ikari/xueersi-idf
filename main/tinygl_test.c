@@ -27,6 +27,9 @@
 #include "texture_checker.h"
 #include "texture_brick.h"
 #include "texture_grid.h"
+#include "texture_sky.h"
+#include "texture_sand.h"
+#include "texture_horizon.h"
 #include "tinygl_physics.h"
 #include "render_queue.h"
 
@@ -82,6 +85,9 @@ static int s_height = 128;
 #define TEX_CHECKER 2
 #define TEX_BRICK   3
 #define TEX_GRID    4
+#define TEX_SKY     5
+#define TEX_SAND    6
+#define TEX_HORIZON 7
 
 /* ── Spawn a falling cube into the physics engine (called by debug console). */
 int tinygl_spawn_cube(void)
@@ -274,18 +280,18 @@ static void draw_skybox(void)
     GLContext* c = gl_get_context();
     c->use_affine_texture = 0;  /* perspective correction works fine on small quads */
 
-    /* +X face: x=s, yz plane, normal +X */
-    draw_skybox_face( s, -s, -s,  0, s*2, 0,  0, 0, s*2,  subdiv, TEX_CHECKER);
+    /* +X face: x=s, yz plane, normal +X — horizon (sky above, sand below) */
+    draw_skybox_face( s, -s, -s,  0, s*2, 0,  0, 0, s*2,  subdiv, TEX_HORIZON);
     /* -X face: x=-s, yz plane, normal -X */
-    draw_skybox_face(-s, -s,  s,  0, s*2, 0,  0, 0,-s*2,  subdiv, TEX_BRICK);
-    /* +Y face: y=s, xz plane, normal +Y */
-    draw_skybox_face(-s,  s,  s,  s*2, 0, 0,  0, 0,-s*2,  subdiv, TEX_GRID);
-    /* -Y face: y=-s, xz plane, normal -Y */
-    draw_skybox_face(-s, -s, -s,  s*2, 0, 0,  0, 0, s*2,  subdiv, TEX_CERAMIC);
-    /* +Z face: z=s, xy plane, normal +Z */
-    draw_skybox_face(-s, -s,  s,  s*2, 0, 0,  0, s*2, 0,  subdiv, TEX_GRID);
-    /* -Z face: z=-s, xy plane, normal -Z */
-    draw_skybox_face( s, -s, -s, -s*2, 0, 0,  0, s*2, 0,  subdiv, TEX_BRICK);
+    draw_skybox_face(-s, -s,  s,  0, s*2, 0,  0, 0,-s*2,  subdiv, TEX_HORIZON);
+    /* +Y face: y=s, xz plane, normal +Y — blue sky + white clouds */
+    draw_skybox_face(-s,  s,  s,  s*2, 0, 0,  0, 0,-s*2,  subdiv, TEX_SKY);
+    /* -Y face: y=-s, xz plane, normal -Y — desert sand */
+    draw_skybox_face(-s, -s, -s,  s*2, 0, 0,  0, 0, s*2,  subdiv, TEX_SAND);
+    /* +Z face: z=s, xy plane, normal +Z — horizon */
+    draw_skybox_face(-s, -s,  s,  s*2, 0, 0,  0, s*2, 0,  subdiv, TEX_HORIZON);
+    /* -Z face: z=-s, xy plane, normal -Z — horizon */
+    draw_skybox_face( s, -s, -s, -s*2, 0, 0,  0, s*2, 0,  subdiv, TEX_HORIZON);
 
     /* restore state for scene geometry */
     glEnable(GL_CULL_FACE);
@@ -385,22 +391,25 @@ int gl_init(int w, int h)
     glMaterialfv(GL_FRONT, GL_DIFFUSE, mat_dif);
     ESP_LOGI(TAG, "Lighting enabled (LIGHT0 directional + ambient)");
 
-    /* ── Textures ── 4 compile-time textures uploaded to flash-backed IDs. */
+    /* ── Textures ── 7 compile-time textures uploaded to flash-backed IDs. */
     {
         struct { GLuint id; const GLvoid *data; const char *name; } texs[] = {
             { TEX_CERAMIC, texture_ceramic_data, "ceramic" },
             { TEX_CHECKER, texture_checker_data, "checker" },
             { TEX_BRICK,   texture_brick_data,   "brick"   },
             { TEX_GRID,    texture_grid_data,    "grid"    },
+            { TEX_SKY,     texture_sky_data,     "sky"     },
+            { TEX_SAND,    texture_sand_data,    "sand"    },
+            { TEX_HORIZON, texture_horizon_data, "horizon" },
         };
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < 7; i++) {
             glBindTexture(GL_TEXTURE_2D, texs[i].id);
             glTexImage2D(GL_TEXTURE_2D, 0, 3, 256, 256, 0,
                          GL_RGB, GL_UNSIGNED_BYTE, texs[i].data);
             ESP_LOGI(TAG, "Texture %d uploaded: %s", texs[i].id, texs[i].name);
         }
         glEnable(GL_TEXTURE_2D);
-        ESP_LOGI(TAG, "GL_TEXTURE_2D enabled (4 textures bound)");
+        ESP_LOGI(TAG, "GL_TEXTURE_2D enabled (7 textures bound)");
     }
 
     diag_fb("after_init");

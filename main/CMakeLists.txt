@@ -85,7 +85,7 @@ endif()
 set(GEN_TEX ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gen_texture.py)
 set(TEX_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
-set(TEXTURES ceramic checker brick grid)
+set(TEXTURES ceramic checker brick grid sky sand horizon)
 set(TEX_HEADERS "")
 foreach(kind ${TEXTURES})
     set(hdr ${TEX_DIR}/texture_${kind}.h)
