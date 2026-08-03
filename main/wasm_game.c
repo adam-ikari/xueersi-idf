@@ -127,6 +127,9 @@ void wasm_game_task(void *arg)
         return;
     }
     ESP_LOGI(TAG, "Host GL functions linked (%d)", GL_NATIVES_COUNT);
+    ESP_LOGI(TAG, "heap: internal_free=%u psram_free=%u (WAMR runtime→PSRAM allocator)",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     char err[128] = { 0 };
     wasm_module_t mod = wasm_runtime_load((uint8_t *)wasm_game_wasm,

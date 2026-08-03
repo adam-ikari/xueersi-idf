@@ -20,3 +20,10 @@
   - 根因：xtensa GCC 无 tail-call 优化（`__has_attribute(musttail)`=0），wasm3 线程化解释器每执行 1 条 wasm 指令嵌套 ~20B 原生栈，仅当顶层 m3_CallV() 返回才回卷。game_update 被 -O3 全展开为 ~2200 ops（971 内联 + 6×206 skybox_face）→ 需 ~44KB；32KB 栈第三次溢出（778f219 曾 16→32KB，逐顶点反射 5658946 又 +555 ops）。
   - 修复：`CONFIG_FREERTOS_TASK_CREATE_ALLOW_EXT_MEM=y` + wasm3_game 任务改用 128KB PSRAM 栈（`heap_caps_malloc(MALLOC_CAP_SPIRAM|8BIT)` + `xTaskCreateStaticPinnedToCore`）。`d_m3CascadedOpcodes` 只改 opcode 表索引，无法修 dispatch，不要走弯路。
   - 待办：**金属立方体没有金属效果**（反射/高光未显示，多纹理叠加未生效）。
+- [x] wasm3 → WAMR 引擎替换 + 图形引擎 SRAM 优先内存设计（spec/plan: docs/superpowers/specs/2026-08-03-wamr-engine-switch-design.md）
+  - WAMR fast interp（有界原生栈）跑同一份 wasm_game.wasm，22 个 GL 原生 → glcmd_stream，渲染零改动
+  - glcmd N 缓冲（2/3 可配）零拷贝 ping-pong + paced，省每帧 memcpy
+  - 显示 N 帧缓冲流水线（默认 3）+ 过去帧 + 后处理 no-op 钩子
+  - 内存：WAMR→PSRAM（wasm_game.c 内联分配器），图形→SRAM（fb/zbuf/glcmd），纹理→flash；mem_mgr 组件删除（YAGNI）
+  - 删 wasm3 组件 + 还原 128KB PSRAM 栈 hack
+  - 待办：金属立方体反光无效果（独立渲染问题，继续排查）
