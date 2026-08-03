@@ -75,33 +75,46 @@ static float s_sky_angle = 0.0f;  /* skybox rotation (slower) */
 static float s_scroll_v = 0.0f;   /* vertical reflection drift */
 
 // ── Draw a cube of half-size hs, centred at origin ─────
+// Per-vertex ENVIRONMENT-MAPPED reflection: each vertex reflects the view
+// direction across the face normal (R = I - 2(N·I)N) and maps R to the
+// environment texture — top faces sample sky, bottom faces sand, sides the
+// horizon. This is what makes the surface read as polished metal rather than
+// a flat-textured box. All texture units share these coords.
 static void cube(float hs)
 {
+    // Viewer in the cube's local frame (fixed, simulated reflection).
+    static const float EYE[3] = { 0, 0, 5 };
+    struct Face { float n[3]; float v[4][3]; };
+    static const Face F[6] = {
+        { { 0, 0, 1}, { {-hs,-hs, hs}, { hs,-hs, hs}, { hs, hs, hs}, {-hs, hs, hs} } },
+        { { 0, 0,-1}, { { hs,-hs,-hs}, {-hs,-hs,-hs}, {-hs, hs,-hs}, { hs, hs,-hs} } },
+        { { 0, 1, 0}, { {-hs, hs, hs}, { hs, hs, hs}, { hs, hs,-hs}, {-hs, hs,-hs} } },
+        { { 0,-1, 0}, { {-hs,-hs,-hs}, { hs,-hs,-hs}, { hs,-hs, hs}, {-hs,-hs, hs} } },
+        { { 1, 0, 0}, { { hs,-hs, hs}, { hs,-hs,-hs}, { hs, hs,-hs}, { hs, hs, hs} } },
+        { {-1, 0, 0}, { {-hs,-hs,-hs}, {-hs,-hs, hs}, {-hs, hs, hs}, {-hs, hs,-hs} } },
+    };
     glBegin(GL_QUADS);
-    glNormal3f(0, 0, 1);  glTexCoord2f(0,0); glVertex3f(-hs,-hs, hs);
-                           glTexCoord2f(1,0); glVertex3f( hs,-hs, hs);
-                           glTexCoord2f(1,1); glVertex3f( hs, hs, hs);
-                           glTexCoord2f(0,1); glVertex3f(-hs, hs, hs);
-    glNormal3f(0, 0,-1);  glTexCoord2f(0,0); glVertex3f( hs,-hs,-hs);
-                           glTexCoord2f(1,0); glVertex3f(-hs,-hs,-hs);
-                           glTexCoord2f(1,1); glVertex3f(-hs, hs,-hs);
-                           glTexCoord2f(0,1); glVertex3f( hs, hs,-hs);
-    glNormal3f(0, 1, 0);  glTexCoord2f(0,0); glVertex3f(-hs, hs, hs);
-                           glTexCoord2f(1,0); glVertex3f( hs, hs, hs);
-                           glTexCoord2f(1,1); glVertex3f( hs, hs,-hs);
-                           glTexCoord2f(0,1); glVertex3f(-hs, hs,-hs);
-    glNormal3f(0,-1, 0);  glTexCoord2f(0,0); glVertex3f(-hs,-hs,-hs);
-                           glTexCoord2f(1,0); glVertex3f( hs,-hs,-hs);
-                           glTexCoord2f(1,1); glVertex3f( hs,-hs, hs);
-                           glTexCoord2f(0,1); glVertex3f(-hs,-hs, hs);
-    glNormal3f(1, 0, 0);  glTexCoord2f(0,0); glVertex3f( hs,-hs, hs);
-                           glTexCoord2f(1,0); glVertex3f( hs,-hs,-hs);
-                           glTexCoord2f(1,1); glVertex3f( hs, hs,-hs);
-                           glTexCoord2f(0,1); glVertex3f( hs, hs, hs);
-    glNormal3f(-1,0, 0);  glTexCoord2f(0,0); glVertex3f(-hs,-hs,-hs);
-                           glTexCoord2f(1,0); glVertex3f(-hs,-hs, hs);
-                           glTexCoord2f(1,1); glVertex3f(-hs, hs, hs);
-                           glTexCoord2f(0,1); glVertex3f(-hs, hs,-hs);
+    for (int f = 0; f < 6; f++) {
+        for (int k = 0; k < 4; k++) {
+            float vx = F[f].v[k][0], vy = F[f].v[k][1], vz = F[f].v[k][2];
+            // view ray: from surface point toward the viewer
+            float ix = EYE[0] - vx, iy = EYE[1] - vy, iz = EYE[2] - vz;
+            float il = __builtin_sqrtf(ix*ix + iy*iy + iz*iz);
+            if (il > 0.001f) { ix /= il; iy /= il; iz /= il; }
+            // reflect across the face normal
+            float nd = F[f].n[0]*ix + F[f].n[1]*iy + F[f].n[2]*iz;
+            float rx = ix - 2*nd*F[f].n[0];
+            float ry = iy - 2*nd*F[f].n[1];
+            // sphere-map: s from Rx, t from Ry (up = sky, down = sand)
+            float s = (rx + 1) * 0.5f;
+            float t = (ry + 1) * 0.5f;
+            if (s < 0) s = 0; else if (s > 1) s = 1;
+            if (t < 0) t = 0; else if (t > 1) t = 1;
+            glNormal3f(F[f].n[0], F[f].n[1], F[f].n[2]);
+            glTexCoord2f(s, t);
+            glVertex3f(vx, vy, vz);
+        }
+    }
     glEnd();
 }
 
