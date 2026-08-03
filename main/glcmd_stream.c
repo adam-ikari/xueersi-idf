@@ -9,6 +9,7 @@
 #include "GL/gl.h"
 #include "zgl.h"
 #include <string.h>
+#include "esp_log.h"
 
 /* ── Encoder (core 0) ───────────────────────────────────── */
 
@@ -118,13 +119,20 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
             glBindTexture(target, tex);
             break;
         }
-        case GLCMD_ACTIVE_TEXTURE:
-            glActiveTexture((GLenum)read_u32(&p));
+        case GLCMD_ACTIVE_TEXTURE: {
+            GLenum u = (GLenum)read_u32(&p);
+            static int d = 0;
+            if (d++ < 10) ESP_LOGI("dbg", "REPLAY activeTex 0x%x", u);
+            glActiveTexture(u);
             break;
+        }
         case GLCMD_TEX_ENVI: {
             GLint target = (GLint)read_u32(&p);
             GLint pname  = (GLint)read_u32(&p);
             GLint param  = (GLint)read_u32(&p);
+            static int d = 0;
+            if (d++ < 10) ESP_LOGI("dbg", "REPLAY texEnvi t=0x%x p=0x%x v=0x%x (active unit %d)",
+                                    target, pname, param, gl_get_context()->active_texture_unit);
             glTexEnvi(target, pname, param);
             break;
         }
