@@ -486,7 +486,9 @@ void render_frame(float angle_y)
         gl_flush_to_display();                 /* DMA target + advance rotation */
     }
 #else
-    /* Non-wasm fallback: native scene queue on the clear color. */
+    /* Non-wasm fallback — NOT compiled (TGL_WASM_GAME is always defined in
+     * main/CMakeLists.txt). If ever enabled, this branch needs its own
+     * zb_set_pbuf() + gl_flush_to_display() for the N-buffer backend. */
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glLoadIdentity();
     glTranslatef(0, 0, -3.5f);
@@ -495,7 +497,8 @@ void render_frame(float angle_y)
     render_queue_drain(render_cmd_draw);
 #endif
 
-    gl_flush_to_display();
+    /* NOTE: no unconditional flush here — flush only when a frame was polled
+     * (inside `if (buf)` above), so the rotating backend is never double-DMA'd. */
 }
 
 /* ── Physics + scene update task (core 0) ───────────────

@@ -66,7 +66,14 @@ static void *st7735_init(int w, int h, int pixel_format)
     for (int i = 0; i < DISPLAY_NUM_BUFFERS; i++) {
         s_fb[i] = (uint16_t *)heap_caps_malloc(w * h * 2,
                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT | MALLOC_CAP_DMA);
-        if (!s_fb[i]) { ESP_LOGE(TAG, "fb[%d] alloc failed", i); return NULL; }
+        if (!s_fb[i]) {
+            ESP_LOGE(TAG, "fb[%d] alloc failed", i);
+            for (int j = 0; j < i; j++) {        /* free already-allocated bufs */
+                heap_caps_free(s_fb[j]);
+                s_fb[j] = NULL;
+            }
+            return NULL;
+        }
         memset(s_fb[i], 0, w * h * 2);
     }
 #ifndef TGL_EMU_BUILD
