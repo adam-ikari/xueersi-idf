@@ -33,6 +33,8 @@
 #include "texture_metal.h"
 #include "texture_specular.h"
 #include "texture_reflect.h"
+#include <pthread.h>
+#include "esp_pthread.h"
 #include "tinygl_physics.h"
 #include "render_queue.h"
 #include "glcmd_stream.h"
@@ -656,19 +658,18 @@ void *tinygl_benchmark(void *arg)
 
 #ifdef TGL_WASM_GAME
     /* Core 0: wasm game task — the sole author of the scene via GL commands.
-     * WAMR fast interpreter has a bounded native stack (no per-opcode growth
-     * like wasm3), so a plain 32KB SRAM stack suffices.
-     * Note: xTaskCreate* usStackDepth is in StackType_t WORDS (4 B on xtensa
-     * ESP32), so 8192 words = 32 KB. */
-    xTaskCreatePinnedToCore(
-        wasm_game_task,
-        "wasm_game",
-        8192,
-        NULL,
-        configMAX_PRIORITIES - 2,
-        NULL,
-        0                           /* core 0 */
-    );
+     * WAMR's ESP-IDF platform layer calls pthread_self() and
+     * pthread_mutex_init(), which require ESP-IDF's pthread bookkeeping.
+     * Create via pthread_create (not xTaskCreate) so pthread_self() works;
+     * pin to core 0 via esp_pthread_set_cfg. */
+    {
+        esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
+        cfg.pin_to_core = 0;
+        cfg.stack_size = 32768;  /* 32 KB — WAMR fast interp is bounded */
+        ESP_ERROR_CHECK(esp_pthread_set_cfg(&cfg));
+        pthread_t thr;
+        pthread_create(&thr, NULL, (void *(*)(void *))wasm_game_task, NULL);
+    }
 #else
     /* No WASM: native scene task on core 0 */
     physics_init();

@@ -101,11 +101,29 @@ static NativeSymbol gl_natives[] = {
 
 /* ── WAMR allocator: runtime memory → PSRAM (not a hot spot) ───────────── */
 static void *wamr_malloc(size_t size)
-{ return heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+{
+    /* WAMR requires 8-byte aligned heap structures. PSRAM heap_caps_malloc
+     * guarantees only 4 bytes on ESP32. Align manually. */
+    void *p = heap_caps_malloc(size + 8, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) return NULL;
+    uintptr_t a = ((uintptr_t)p + 8) & ~(uintptr_t)7;
+    ((void **)a)[-1] = p;
+    return (void *)a;
+}
 static void *wamr_realloc(void *ptr, size_t size)
-{ return heap_caps_realloc(ptr, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+{
+    if (!ptr) return wamr_malloc(size);
+    void *old_base = ((void **)ptr)[-1];
+    void *p = heap_caps_realloc(old_base, size + 8, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!p) return NULL;
+    uintptr_t a = ((uintptr_t)p + 8) & ~(uintptr_t)7;
+    ((void **)a)[-1] = p;
+    return (void *)a;
+}
 static void wamr_free(void *ptr)
-{ heap_caps_free(ptr); }
+{
+    if (ptr) heap_caps_free(((void **)ptr)[-1]);
+}
 
 /* ── WAMR game task (core 0) ──────────────────────────────────────────── */
 void wasm_game_task(void *arg)
