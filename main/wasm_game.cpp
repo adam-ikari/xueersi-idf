@@ -96,10 +96,6 @@ static const material_t s_materials[] = {
     { TEX_METAL,   TEX_REFLECT, TEX_SPECULAR, 1.0f,  1.2f, true  },  // 金属
     { TEX_BRICK,   0,           0,            0.0f,  0.0f, false },  // 砖块
     { TEX_SAND,    0,           0,            0.0f,  0.0f, false },  // 沙石
-    { TEX_CERAMIC, TEX_GRID,    TEX_REFLECT,  0.3f,  0.5f, false },  // 陶瓷
-    { TEX_CHECKER, TEX_REFLECT, 0,            0.6f,  0.0f, false },  // 棋盘
-    { TEX_GRID,    TEX_CHECKER, 0,            0.4f,  0.0f, false },  // 网格
-    { TEX_METAL,   TEX_BRICK,   TEX_SPECULAR, 0.8f,  0.6f, true  },  // 铁锈金属
 };
 static const int MATERIAL_COUNT = sizeof(s_materials) / sizeof(s_materials[0]);
 static int s_material_idx = 0;  /* current material index */
