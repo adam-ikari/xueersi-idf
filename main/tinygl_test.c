@@ -38,6 +38,7 @@
 #include "tinygl_physics.h"
 #include "render_queue.h"
 #include "glcmd_stream.h"
+#include "hw_input.h"
 
 #ifdef TGL_WASM_GAME
 #include "wasm_game.h"
@@ -585,6 +586,17 @@ void tinygl_render_task(void *arg)
         frame_start_us = esp_timer_get_time();
 
         if (!tinygl_render_paused) {
+            /* Poll button edges for the WASM game (ring buffer, thread-safe).
+             * Must happen before render_frame() so fresh key events are
+             * available to the WASM host when game_update() runs. */
+            {
+                hw_key_event_t evs[4];
+                int n = hw_input_poll_events(evs, 4);
+                for (int i = 0; i < n; i++) {
+                    wasm_key_push(evs[i].btn_idx, evs[i].pressed ? 1 : 0);
+                }
+            }
+
             /* Wait for previous frame's DMA to complete before writing pbuf.
              * This prevents rendering from corrupting the buffer being
              * transmitted — the root cause of the "missing polygon" flicker. */

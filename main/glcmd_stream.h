@@ -85,6 +85,12 @@ void glcmd_frame_release(void);
  *  @return Number of bytes consumed. */
 uint32_t glcmd_replay(const uint8_t *buf, uint32_t len);
 
+/** Push a key event into the WASM game's input ring buffer.
+ *  Called from the render task (core 1) — thread-safe.
+ *  @param btn_idx  0=UP 1=DOWN 2=LEFT 3=RIGHT 4=A 5=B
+ *  @param down     true = down edge, false = up edge */
+void wasm_key_push(int btn_idx, int down);
+
 #ifdef __cplusplus
 }
 #endif

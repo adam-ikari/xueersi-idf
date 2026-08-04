@@ -14,6 +14,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include <math.h>
+#include <string.h>
 #include "freertos/task.h"
 #include "glcmd_stream.h"
 #include "wasm_game.wasm.h"
@@ -76,6 +77,33 @@ static float host_cosf(wasm_exec_env_t env, float x)
 static float host_sinf(wasm_exec_env_t env, float x)
 { GLW_EMPTY(env); return sinf(x); }
 
+/* ── Key event ring buffer (written by core 1 render task, read by core 0 WASM host) ─ */
+#define KEY_RING_SIZE 16
+static volatile int32_t s_key_events[KEY_RING_SIZE];
+static volatile int     s_key_rd;  /* WASM reads from here */
+static volatile int     s_key_wr;  /* render task writes to here */
+
+/** Push a key event into the ring.  Called from the render task (core 1).
+ *  @param btn_idx  0=UP 1=DOWN 2=LEFT 3=RIGHT 4=A 5=B
+ *  @param down     true = down edge, false = up edge */
+void wasm_key_push(int btn_idx, int down)
+{
+    int next = (s_key_wr + 1) % KEY_RING_SIZE;
+    if (next == s_key_rd) return;  /* full, drop oldest */
+    /* Encode: (btn_idx << 2) | (down ? 0 : 1)  — matches wasm_game.cpp KEY_EDGE_* */
+    s_key_events[s_key_wr] = ((int32_t)btn_idx << 2) | (down ? 0 : 1);
+    s_key_wr = next;
+}
+
+static int32_t host_game_get_key(wasm_exec_env_t env)
+{
+    GLW_EMPTY(env);
+    if (s_key_rd == s_key_wr) return 0;  /* empty */
+    int32_t ev = s_key_events[s_key_rd];
+    s_key_rd = (s_key_rd + 1) % KEY_RING_SIZE;
+    return ev;
+}
+
 /* ── Native symbol table — signatures match wasm imports exactly ─────────
  * WAMR signature convention (wasm_native.c compare_type_with_signature):
  * i = i32, I = i64, f = f32, F = f64. The wasm module declares its GL
@@ -105,6 +133,7 @@ static NativeSymbol gl_natives[] = {
     { "glFlush",         (void *)host_glFlush,         "()",       NULL },
     { "cosf",            (void *)host_cosf,            "(f)f",     NULL },
     { "sinf",            (void *)host_sinf,            "(f)f",     NULL },
+    { "game_get_key",    (void *)host_game_get_key,    "()i",      NULL },
 };
 #define GL_NATIVES_COUNT (sizeof(gl_natives) / sizeof(gl_natives[0]))
 

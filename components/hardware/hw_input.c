@@ -18,6 +18,7 @@ static const hw_button_t s_buttons[] = {
 static uint32_t s_last_change_ms[sizeof(s_buttons) / sizeof(s_buttons[0])];
 static int      s_last_raw[sizeof(s_buttons) / sizeof(s_buttons[0])];
 static int      s_stable[sizeof(s_buttons) / sizeof(s_buttons[0])];
+static bool     s_was_pressed[HW_KEY_COUNT];  /* last known stable state for edge detect */
 
 void hw_input_init(void)
 {
@@ -56,6 +57,7 @@ void hw_input_init(void)
         s_last_change_ms[i] = now_ms;
         s_last_raw[i] = -1;
         s_stable[i]   = -1;
+        s_was_pressed[i] = false;
     }
 
     ESP_LOGI(TAG, "buttons init ok (%u buttons)", (unsigned)n);
@@ -97,5 +99,23 @@ bool hw_input_is_pressed(size_t idx)
 
 void hw_input_poll(void)
 {
-    /* P4: SDL3 event injection will go here */
+    /* Edge detection: compare current stable state to last-known state,
+     * emit events for any transitions. */
+    hw_key_event_t buf[6];
+    hw_input_poll_events(buf, 6);
+}
+
+int hw_input_poll_events(hw_key_event_t *events, int max)
+{
+    int count = 0;
+    for (int i = 0; i < HW_KEY_COUNT && count < max; i++) {
+        bool now = hw_input_is_pressed(i);
+        if (now != s_was_pressed[i]) {
+            s_was_pressed[i] = now;
+            events[count].btn_idx = (uint8_t)i;
+            events[count].pressed = now;
+            count++;
+        }
+    }
+    return count;
 }

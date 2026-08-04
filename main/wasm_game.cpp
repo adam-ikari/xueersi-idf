@@ -1,6 +1,6 @@
 // wasm_game.cpp — Xiaomiao 3D game, submitted entirely through GL APIs.
 //
-// Runs on core 0 via the wasm3 interpreter. It is the sole author of every
+// Runs on core 0 via the WAMR fast interpreter. It is the sole author of every
 // rendered scene: it calls GL lookalikes (glBegin / glVertex3f / ...), which
 // the host encodes into a command stream that core 1 replays against TinyGL.
 // Textures are referenced by integer NAME only (glBindTexture) — no texture
@@ -36,6 +36,7 @@ IMPORT(void, glDisable, int cap);
 IMPORT(void, glDepthMask, int flag);
 IMPORT(void, glClear, int mask);
 IMPORT(void, glFlush);
+IMPORT(int,  game_get_key);
 
 // ── GL constants ────────────────────────────────────────
 enum {
@@ -58,9 +59,26 @@ enum {
     GL_DEPTH_BUFFER_BIT  = 0x00000100,
 };
 
-// Texture names (firmware-integrated; integer names, no data in the API)
+// ── Key event encoding (matches wasm_game.c) ────────────
+// game_get_key() returns (btn_idx << 2) | edge, or 0 for empty.
 enum {
+    KEY_EDGE_DOWN = 0,
+    KEY_EDGE_UP   = 1,
+    BTN_UP        = 0,
+    BTN_DOWN      = 1,
+    BTN_LEFT      = 2,
+    BTN_RIGHT     = 3,
+    BTN_A         = 4,
+    BTN_B         = 5,
+};
+
+// Texture names (firmware-integrated; integer names, no data in the API)
+// IDs 1-10 are uploaded in tinygl_test.c at boot.
+enum {
+    TEX_CERAMIC  = 1,
     TEX_CHECKER  = 2,
+    TEX_BRICK    = 3,
+    TEX_GRID     = 4,
     TEX_SKY      = 5,
     TEX_SAND     = 6,
     TEX_HORIZON  = 7,
@@ -69,20 +87,26 @@ enum {
     TEX_REFLECT  = 10,
 };
 
+// Available base textures in cycle order (LEFT/RIGHT to switch)
+static const int s_tex_pool[] = {
+    TEX_CERAMIC, TEX_CHECKER, TEX_BRICK, TEX_GRID, TEX_METAL, TEX_SAND,
+};
+static const int TEX_POOL_COUNT = sizeof(s_tex_pool) / sizeof(s_tex_pool[0]);
+
 // ── Global state ────────────────────────────────────────
-static float s_angle = 0.0f;      /* cube rotation (fast) */
-static float s_sky_angle = 0.0f;  /* skybox rotation (slower) */
+static float s_angle = 0.0f;       /* cube rotation (fast) */
+static float s_sky_angle = 0.0f;   /* skybox rotation (slower) */
+
+static int s_tex_base  = TEX_METAL;    /* current base texture */
+static int s_tex_ov1   = TEX_REFLECT;  /* overlay texture unit 1 */
+static int s_tex_ov2   = TEX_SPECULAR; /* overlay texture unit 2 */
+static float s_ov1_w   = 1.0f;         /* ADD weight for overlay 1 */
+static float s_ov2_w   = 1.2f;         /* ADD weight for overlay 2 */
+static int s_label_show = 0;           /* frames remaining for texture name label */
 
 // ── Draw a cube of half-size hs, centred at origin ─────
-// Per-vertex ENVIRONMENT-MAPPED reflection: each vertex reflects the view
-// direction across the face normal (R = I - 2(N·I)N) and maps R to the
-// environment texture — top faces sample sky, bottom faces sand, sides the
-// horizon. This is what makes the surface read as polished metal rather than
-// a flat-textured box. All texture units share these coords.
-//
-// eye_x/y/z: viewer position in the cube's LOCAL frame.  As the cube tumbles,
-// the effective view direction changes, which shifts the reflection sampling
-// across the environment map — producing the flowing-mirror effect.
+// eye_x/y/z: viewer position in the cube's LOCAL frame (only used for metal
+// reflection mapping; other textures use a fixed distant viewer (0,0,5)).
 static void cube(float hs, float eye_x, float eye_y, float eye_z)
 {
     struct Face { float n[3]; float v[4][3]; };
@@ -150,8 +174,6 @@ static void draw_skybox(void)
     glDisable(GL_LIGHTING);
     glDisable(GL_CULL_FACE);
 
-    /* Each side face maps texture v along the WORLD Y (up), so the horizon's
-     * sand sits at the face bottom and sky at the top. */
     /* +X */ skybox_face( s,-s,-s,  0, 0, 2*s,  0, 2*s, 0, TEX_HORIZON);
     /* -X */ skybox_face(-s,-s, s,  0, 0,-2*s,  0, 2*s, 0, TEX_HORIZON);
     /* +Y */ skybox_face(-s, s, s,  2*s, 0, 0,  0, 0,-2*s, TEX_SKY);
@@ -164,84 +186,80 @@ static void draw_skybox(void)
     glDepthMask(1);
 }
 
-// ── Metal cube: 3-layer additive multi-texture ─────────
-static void draw_metal_cube(float hs)
+// ── Draw the textured cube with configurable layers ─────
+// base_tex:      unit 0, REPLACE
+// ov1_tex/ov1_w: unit 1, ADD with weight (tex=0 to disable)
+// ov2_tex/ov2_w: unit 2, ADD with weight (tex=0 to disable)
+static void draw_cube(float hs, int base_tex,
+                      int ov1_tex, float ov1_w,
+                      int ov2_tex, float ov2_w)
 {
+    /* Unit 0: base texture */
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, TEX_METAL);
+    glBindTexture(GL_TEXTURE_2D, base_tex);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
-    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 1.0f, 1.0f, 1.0f, 1.0f);
-    /* No glTexOffset here — reflection UV is computed per-vertex from the
-     * cube's actual orientation (see cube() eye params below). */
+    /* Unit 1: overlay 1 (ADD) */
+    if (ov1_tex && ov1_w > 0.01f) {
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, ov1_tex);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, ov1_w, ov1_w, ov1_w, 1.0f);
+    } else {
+        glActiveTexture(GL_TEXTURE1);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
+    }
 
-    glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);
-    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 1.2f, 1.2f, 1.2f, 1.0f);
-    /* Animated specular: offset the highlight mask so it sweeps across faces
-     * as the cube rotates, simulating a moving light reflection. */
-    {
-        float spec_u = s_angle * 0.3f;
-        float spec_v = s_angle * 0.15f;
-        glTexOffset(GL_TEXTURE2, spec_u, spec_v);
+    /* Unit 2: overlay 2 (ADD) */
+    if (ov2_tex && ov2_w > 0.01f) {
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, ov2_tex);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, ov2_w, ov2_w, ov2_w, 1.0f);
+        /* Animated specular sweep (only meaningful for specular overlay) */
+        if (ov2_tex == TEX_SPECULAR) {
+            float su = s_angle * 0.3f;
+            float sv = s_angle * 0.15f;
+            glTexOffset(GL_TEXTURE2, su, sv);
+        }
+    } else {
+        glActiveTexture(GL_TEXTURE2);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
     }
 
     // Compute viewer position in the cube's LOCAL frame.
-    //
-    // Scene modelview for the cube (OpenGL order reversed):
-    //   M = T(0,0,-3.5) * R_x(25) * R_y(s_angle) * R_y(s_angle) * R_x(0.6*a)
-    //
-    // World-space viewer is at origin (0,0,0).  In the cube's local frame:
-    //   viewer_local = inv(M) * (0,0,0)
-    //
-    // Step by step, working backward from world origin through the inverse
-    // of each transform in the chain:
-    //
-    // inv(T(0,0,-3.5)): (0,0,0) → (0,0,3.5)  [camera at +3.5 in eye space]
-    //
-    // Then inverse-rotate through: R_x(-25) → R_y(-a) → R_y(-a) → R_x(-0.6*a)
-    // where a = s_angle.
-    //
-    // For a distant viewer, the view direction is approximately parallel
-    // across the cube surface, so we place the eye at
-    //   eye = normalize(viewer_local) * 5.0
+    // For metal base: full inverse modelview for environment reflection.
+    // For other textures: fixed distant viewer (0,0,5) — no reflection needed.
     {
-        float a  = s_angle * 3.14159265f / 180.0f;
-        float ax = a * 0.6f;                        // cube X rotation
-        float ay = a;                               // cube Y rotation (scene yaw)
-        float px = 25.0f * 3.14159265f / 180.0f;   // scene pitch
+        float eye_x = 0.0f, eye_y = 0.0f, eye_z = 5.0f;
 
-        float ca = __builtin_cosf(ax), sa = __builtin_sinf(ax);
-        float cb = __builtin_cosf(ay), sb = __builtin_sinf(ay);
-        float cp = __builtin_cosf(px), sp = __builtin_sinf(px);
+        if (base_tex == TEX_METAL) {
+            float a  = s_angle * 3.14159265f / 180.0f;
+            float ax = a * 0.6f;
+            float ay = a;
+            float px = 25.0f * 3.14159265f / 180.0f;
 
-        // Start: viewer in eye space (after inv-T)
-        float vx = 0.0f, vy = 0.0f, vz = 3.5f;
+            float ca = __builtin_cosf(ax), sa = __builtin_sinf(ax);
+            float cb = __builtin_cosf(ay), sb = __builtin_sinf(ay);
+            float cp = __builtin_cosf(px), sp = __builtin_sinf(px);
 
-        // inv(R_x(25)) = R_x(-25): rotate around X by -25deg
-        // (vx, vy, vz) → (vx, vy*cp + vz*sp, -vy*sp + vz*cp)
-        { float t = vy; vy = t*cp + vz*sp; vz = -t*sp + vz*cp; }
+            float vx = 0.0f, vy = 0.0f, vz = 3.5f;
 
-        // inv(R_y(s_angle)) = R_y(-a): rotate around Y by -a (scene yaw)
-        // (vx, vy, vz) → (vx*cb + vz*(-sb), vy, vx*sb + vz*cb)
-        { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
+            // inv(R_x(25))
+            { float t = vy; vy = t*cp + vz*sp; vz = -t*sp + vz*cp; }
+            // inv(R_y(a)) — scene yaw
+            { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
+            // inv(R_y(a)) — cube Y
+            { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
+            // inv(R_x(0.6a))
+            { float t = vy; vy = t*ca + vz*sa; vz = -t*sa + vz*ca; }
 
-        // inv(R_y(s_angle)) = R_y(-a): rotate around Y by -a (cube Y)
-        { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
-
-        // inv(R_x(0.6*a)) = R_x(-ax): rotate around X by -ax (cube X)
-        { float t = vy; vy = t*ca + vz*sa; vz = -t*sa + vz*ca; }
-
-        // Normalize view direction, place virtual viewer 5 units away
-        float len = __builtin_sqrtf(vx*vx + vy*vy + vz*vz);
-        if (len > 0.001f) { vx /= len; vy /= len; vz /= len; }
-        float eye_x = vx * 5.0f;
-        float eye_y = vy * 5.0f;
-        float eye_z = vz * 5.0f;
+            float len = __builtin_sqrtf(vx*vx + vy*vy + vz*vz);
+            if (len > 0.001f) { vx /= len; vy /= len; vz /= len; }
+            eye_x = vx * 5.0f;
+            eye_y = vy * 5.0f;
+            eye_z = vz * 5.0f;
+        }
 
         glActiveTexture(GL_TEXTURE0);
         glPushMatrix();
@@ -271,19 +289,89 @@ extern "C" void game_init(void)
     glFlush();
 }
 
+// ── Consume key events and update texture state ────────
+static void handle_keys(void)
+{
+    for (;;) {
+        int ev = game_get_key();
+        if (!ev) break;
+
+        int btn  = ev >> 2;
+        int edge = ev & 3;
+
+        if (edge != KEY_EDGE_DOWN) continue;  /* only act on press */
+
+        switch (btn) {
+        case BTN_LEFT: {
+            /* Cycle base texture backward */
+            int idx = 0;
+            for (int i = 0; i < TEX_POOL_COUNT; i++) {
+                if (s_tex_pool[i] == s_tex_base) { idx = i; break; }
+            }
+            idx = (idx - 1 + TEX_POOL_COUNT) % TEX_POOL_COUNT;
+            s_tex_base = s_tex_pool[idx];
+            s_label_show = 45;  /* show label for ~1.5s at 30fps */
+            break;
+        }
+        case BTN_RIGHT: {
+            /* Cycle base texture forward */
+            int idx = 0;
+            for (int i = 0; i < TEX_POOL_COUNT; i++) {
+                if (s_tex_pool[i] == s_tex_base) { idx = i; break; }
+            }
+            idx = (idx + 1) % TEX_POOL_COUNT;
+            s_tex_base = s_tex_pool[idx];
+            s_label_show = 45;
+            break;
+        }
+        case BTN_A:
+            /* Toggle overlay 1: reflect → none → grid → checker → reflect */
+            if      (s_tex_ov1 == 0)         s_tex_ov1 = TEX_REFLECT;
+            else if (s_tex_ov1 == TEX_REFLECT) s_tex_ov1 = TEX_GRID;
+            else if (s_tex_ov1 == TEX_GRID)    s_tex_ov1 = TEX_CHECKER;
+            else                             s_tex_ov1 = 0;
+            s_label_show = 30;
+            break;
+        case BTN_B:
+            /* Toggle overlay 2: specular → none → brick → ceramic → specular */
+            if      (s_tex_ov2 == 0)           s_tex_ov2 = TEX_SPECULAR;
+            else if (s_tex_ov2 == TEX_SPECULAR) s_tex_ov2 = TEX_BRICK;
+            else if (s_tex_ov2 == TEX_BRICK)    s_tex_ov2 = TEX_CERAMIC;
+            else                              s_tex_ov2 = 0;
+            s_label_show = 30;
+            break;
+        case BTN_UP:
+            /* Increase overlay 1 weight */
+            s_ov1_w += 0.1f;
+            if (s_ov1_w > 2.0f) s_ov1_w = 2.0f;
+            if (s_tex_ov1 == 0) s_tex_ov1 = TEX_REFLECT;  /* auto-enable */
+            s_label_show = 20;
+            break;
+        case BTN_DOWN:
+            /* Decrease overlay 1 weight */
+            s_ov1_w -= 0.1f;
+            if (s_ov1_w < 0.0f) s_ov1_w = 0.0f;
+            s_label_show = 20;
+            break;
+        }
+    }
+}
+
 // ── game_update: submit the full scene through GL APIs ─
 extern "C" void game_update(void)
 {
     s_angle += 2.0f;
     if (s_angle >= 360.0f) s_angle -= 360.0f;
-    /* Skybox rotates slower than the cube. */
     s_sky_angle += 0.8f;
     if (s_sky_angle >= 360.0f) s_sky_angle -= 360.0f;
+    if (s_label_show > 0) s_label_show--;
+
+    handle_keys();
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glMatrixMode(GL_MODELVIEW);
 
-    /* Skybox camera (rotation only) — rotates SLOWER than the cube. */
+    /* Skybox camera */
     glLoadIdentity();
     glRotatef(25, 1, 0, 0);
     glRotatef(s_sky_angle, 0, 1, 0);
@@ -295,8 +383,8 @@ extern "C" void game_update(void)
     glRotatef(25, 1, 0, 0);
     glRotatef(s_angle, 0, 1, 0);
 
-    /* Metal cube (the scene's only object) */
-    draw_metal_cube(0.8f);
+    /* Draw the cube with current texture config */
+    draw_cube(0.8f, s_tex_base, s_tex_ov1, s_ov1_w, s_tex_ov2, s_ov2_w);
 
     glFlush();
 }
