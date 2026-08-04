@@ -13,6 +13,7 @@
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include <math.h>
 #include "freertos/task.h"
 #include "glcmd_stream.h"
 #include "wasm_game.wasm.h"
@@ -69,6 +70,12 @@ static void host_glClear(wasm_exec_env_t env, int32_t mask)
 static void host_glFlush(wasm_exec_env_t env)
 { GLW_EMPTY(env); glcmd_publish(); glcmd_begin_frame(); }
 
+/* math functions used by wasm_game.cpp (cosf/sinf for rotation trig) */
+static float host_cosf(wasm_exec_env_t env, float x)
+{ GLW_EMPTY(env); return cosf(x); }
+static float host_sinf(wasm_exec_env_t env, float x)
+{ GLW_EMPTY(env); return sinf(x); }
+
 /* ── Native symbol table — signatures match wasm imports exactly ─────────
  * WAMR signature convention (wasm_native.c compare_type_with_signature):
  * i = i32, I = i64, f = f32, F = f64. The wasm module declares its GL
@@ -96,6 +103,8 @@ static NativeSymbol gl_natives[] = {
     { "glDepthMask",     (void *)host_glDepthMask,     "(i)",      NULL },
     { "glClear",         (void *)host_glClear,         "(i)",      NULL },
     { "glFlush",         (void *)host_glFlush,         "()",       NULL },
+    { "cosf",            (void *)host_cosf,            "(f)f",     NULL },
+    { "sinf",            (void *)host_sinf,            "(f)f",     NULL },
 };
 #define GL_NATIVES_COUNT (sizeof(gl_natives) / sizeof(gl_natives[0]))
 

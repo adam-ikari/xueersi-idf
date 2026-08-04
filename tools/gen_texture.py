@@ -179,59 +179,148 @@ def gen_sand(width: int, height: int) -> bytearray:
 
 
 def gen_metal(width: int, height: int) -> bytearray:
-    """Metallic base texture using Blinn-Phong specular reflection.
+    """Metallic base texture with baked surface detail (bumps/scratches/pits).
 
-    Precomputes a physically-based metal surface:
-    - Dark steel base with brushed anisotropy
-    - Blinn-Phong specular highlight: pow(N·H, shininess) with
-      H = normalize(V + L) baked into the texture for a directional light
-      above-left (~45deg), viewer at normal incidence.
-    - Edge darkening (Fresnel-like) for increased depth.
+    Combines Blinn-Phong specular lighting with a procedural heightfield
+    so the bump relief is baked directly into the base texture — no extra
+    texture unit consumed."""
+    import math, random as _random
+    rng = _random.Random(42)  # deterministic
 
-    Kept dark so the ADD pass with reflect/specular textures has headroom."""
-    import math
     buf = bytearray(width * height * 3)
     cx, cy = width / 2.0, height / 2.0
 
     # Light direction (above-left-front, normalized)
-    lx, ly, lz = -0.4, -0.5, 0.77   # unit vector ~ (-0.4, -0.5, 0.77)
+    lx, ly, lz = -0.4, -0.5, 0.77
     ll = math.sqrt(lx*lx + ly*ly + lz*lz)
     lx /= ll; ly /= ll; lz /= ll
 
-    # Viewer at normal incidence (0, 0, 1).  Half-vector H = normalize(V + L)
+    # Viewer at normal incidence. Half-vector H = normalize(V + L)
     hx, hy, hz = lx, ly, lz + 1.0
     hl = math.sqrt(hx*hx + hy*hy + hz*hz)
     hx /= hl; hy /= hl; hz /= hl
+    shininess = 64.0
 
-    shininess = 64.0   # Blinn-Phong exponent (metal = high)
+    # ── Procedural heightfield features ────────────────────
+    # Fine grain noise (sand-cast metal)
+    nw, nh = 64, 64
+    noise = [rng.randint(0, 255) for _ in range(nw * nh)]
+
+    # Directional scratches (brushed metal)
+    scratches = []
+    for _ in range(8):
+        scratches.append((
+            rng.uniform(0, width), rng.uniform(0, height),
+            rng.uniform(-0.6, 0.6),   # angle
+            rng.uniform(60, 180),      # length
+            rng.uniform(1.5, 3.5),     # width
+        ))
+
+    # Pits (casting defects)
+    pits = []
+    for _ in range(25):
+        pits.append((
+            rng.uniform(0, width), rng.uniform(0, height),
+            rng.uniform(3.0, 10.0),   # radius
+            rng.uniform(0.35, 0.75),   # depth
+        ))
+
+    # Rivets/studs
+    rivets = []
+    for _ in range(6):
+        rivets.append((
+            rng.uniform(0.12 * width, 0.88 * width),
+            rng.uniform(0.12 * height, 0.88 * height),
+            rng.uniform(5.0, 11.0),    # radius
+        ))
 
     for y in range(height):
-        # Brushed steel gradient with subtle vertical streaks
-        base = 35 + (y * 35 // height)
+        base = 35 + (y * 35 // height)  # brushed steel vertical gradient
         for x in range(width):
             streak = ((x * 31 + y * 7) & 15) - 8
 
-            # Map pixel (x, y) to a local surface normal on the sphere
-            # (simulating a convex spherical highlight patch)
-            dx = (x - cx) / cx        # [-1, 1]
-            dy = (y - cy) / cy        # [-1, 1]
-            d2 = dx*dx + dy*dy
-            if d2 < 1.0:
-                # Sphere normal at this point: n = (dx, dy, sqrt(1-d²))
-                nz = math.sqrt(1.0 - d2)
-                ndot_h = dx * hx + dy * hy + nz * hz
-                if ndot_h < 0.0:
-                    ndot_h = 0.0
+            # ── Height displacement (fakes surface micro-geometry) ──
+            h_disp = 0.0
+
+            # Grain noise
+            nx = int(x * nw / width)
+            ny = int(y * nh / height)
+            h_disp += (noise[(ny % nh) * nw + (nx % nw)] - 128) * 0.35
+
+            # Scratches
+            for sx, sy, sa, sl, sw in scratches:
+                d_local_x = x - sx
+                d_local_y = y - sy
+                along = d_local_x * math.cos(sa) + d_local_y * math.sin(sa)
+                across = abs(-d_local_x * math.sin(sa) + d_local_y * math.cos(sa))
+                if 0 <= along <= sl and across < sw:
+                    f = (1.0 - across / sw) ** 2
+                    ef = 1.0 - abs(along - sl/2) / (sl/2)
+                    h_disp -= 60.0 * f * ef
+
+            # Pits
+            for px, py, pr, pd in pits:
+                d2 = (x - px)**2 + (y - py)**2
+                if d2 < pr*pr:
+                    dist = math.sqrt(d2) / pr
+                    h_disp -= 70.0 * pd * (1.0 - dist) ** 2
+
+            # Rivets
+            for rx, ry, rr in rivets:
+                d2 = (x - rx)**2 + (y - ry)**2
+                if d2 < rr*rr*1.5*1.5:
+                    dist = math.sqrt(d2) / rr
+                    if dist < 1.0:
+                        h_disp += 55.0 * (1.0 - dist*dist)
+                    elif dist < 1.5:
+                        fade = (1.0 - (dist - 1.0) / 0.5) ** 2
+                        h_disp -= 16.0 * fade
+
+            # Edge shadow
+            dx = (x - cx) / cx
+            dy = (y - cy) / cy
+            edge = dx*dx + dy*dy
+            if edge > 0.7:
+                h_disp -= 25.0 * ((edge - 0.7) / 0.3) ** 2
+
+            # ── Perturb surface normal with height gradient ──
+            # Sample height at neighbours for finite-difference normal
+            h_c = h_disp
+            def h_at(ox, oy):
+                # Re-sampling h_disp at offsets is expensive but correct.
+                # For simplicity, approximate the perturbation on the sphere
+                # normal by directly modulating N·H based on a fake tangent
+                # slope derived from the 2D height gradient in texture space.
+                return h_c  # fallback: no perturbation for off-samples below
+            # Approximate normal perturbation:
+            #   perturbed N ≈ normalize(N + (dh/dx * T_x + dh/dy * T_y))
+            # where T_x, T_y are tangent vectors in screen space.
+            # Simpler: just modulate the specular contribution by height.
+            # Positive h_disp = raised = catches more light = brighter.
+            # Negative h_disp = recessed = darker.
+
+            # ── Blinn-Phong specular on sphere ──
+            dx_s = (x - cx) / cx
+            dy_s = (y - cy) / cy
+            d2_s = dx_s*dx_s + dy_s*dy_s
+            if d2_s < 1.0:
+                nz = math.sqrt(1.0 - d2_s)
+                ndot_h = dx_s * hx + dy_s * hy + nz * hz
+                if ndot_h < 0.0: ndot_h = 0.0
                 spec = ndot_h ** shininess
-                # Edge darkening: cos(theta) = nz
-                fresnel = 0.6 + 0.4 * (1.0 - nz)  # edge ~1.0, center ~0.6
+                fresnel = 0.6 + 0.4 * (1.0 - nz)
             else:
                 spec = 0.0
                 fresnel = 1.0
 
-            r = max(0, min(255, base + streak + int(spec * 180.0 * fresnel)))
-            g = max(0, min(255, base + streak + int(spec * 180.0 * fresnel)))
-            b = max(0, min(255, base + streak + int(spec * 200.0 * fresnel) + 6))
+            # Height modulates specular: raised = brighter, recessed = darker
+            height_mod = 1.0 + h_disp / 255.0  # ~[0.7, 1.3]
+            if height_mod < 0.5: height_mod = 0.5
+            if height_mod > 1.5: height_mod = 1.5
+
+            r = max(0, min(255, base + streak + int(spec * 180.0 * fresnel * height_mod)))
+            g = max(0, min(255, base + streak + int(spec * 180.0 * fresnel * height_mod)))
+            b = max(0, min(255, base + streak + int(spec * 200.0 * fresnel * height_mod) + 6))
 
             i = (y * width + x) * 3
             buf[i] = r; buf[i+1] = g; buf[i+2] = b

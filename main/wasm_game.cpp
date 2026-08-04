@@ -72,7 +72,6 @@ enum {
 // ── Global state ────────────────────────────────────────
 static float s_angle = 0.0f;      /* cube rotation (fast) */
 static float s_sky_angle = 0.0f;  /* skybox rotation (slower) */
-static float s_scroll_v = 0.0f;   /* vertical reflection drift */
 
 // ── Draw a cube of half-size hs, centred at origin ─────
 // Per-vertex ENVIRONMENT-MAPPED reflection: each vertex reflects the view
@@ -80,10 +79,12 @@ static float s_scroll_v = 0.0f;   /* vertical reflection drift */
 // environment texture — top faces sample sky, bottom faces sand, sides the
 // horizon. This is what makes the surface read as polished metal rather than
 // a flat-textured box. All texture units share these coords.
-static void cube(float hs)
+//
+// eye_x/y/z: viewer position in the cube's LOCAL frame.  As the cube tumbles,
+// the effective view direction changes, which shifts the reflection sampling
+// across the environment map — producing the flowing-mirror effect.
+static void cube(float hs, float eye_x, float eye_y, float eye_z)
 {
-    // Viewer in the cube's local frame (fixed, simulated reflection).
-    static const float EYE[3] = { 0, 0, 5 };
     struct Face { float n[3]; float v[4][3]; };
     static const Face F[6] = {
         { { 0, 0, 1}, { {-hs,-hs, hs}, { hs,-hs, hs}, { hs, hs, hs}, {-hs, hs, hs} } },
@@ -97,8 +98,8 @@ static void cube(float hs)
     for (int f = 0; f < 6; f++) {
         for (int k = 0; k < 4; k++) {
             float vx = F[f].v[k][0], vy = F[f].v[k][1], vz = F[f].v[k][2];
-            // view ray: from surface point toward the viewer
-            float ix = EYE[0] - vx, iy = EYE[1] - vy, iz = EYE[2] - vz;
+            // view ray: from surface point toward the viewer (in local frame)
+            float ix = eye_x - vx, iy = eye_y - vy, iz = eye_z - vz;
             float il = __builtin_sqrtf(ix*ix + iy*iy + iz*iz);
             if (il > 0.001f) { ix /= il; iy /= il; iz /= il; }
             // reflect across the face normal
@@ -173,26 +174,84 @@ static void draw_metal_cube(float hs)
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, TEX_REFLECT);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.8f, 0.8f, 0.8f, 1.0f);
-    /* Reflection environment offset computed from the CAMERA yaw (s_angle)
-     * relative to the SKYBOX yaw (s_sky_angle), scaled so the flow is clearly
-     * visible (a few texels per frame). */
-    glTexOffset(GL_TEXTURE1, 3.0f * (s_angle - s_sky_angle) / 360.0f, s_scroll_v);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 1.0f, 1.0f, 1.0f, 1.0f);
+    /* No glTexOffset here — reflection UV is computed per-vertex from the
+     * cube's actual orientation (see cube() eye params below). */
 
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, TEX_SPECULAR);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 0.9f, 0.9f, 0.9f, 1.0f);
+    glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, 1.2f, 1.2f, 1.2f, 1.0f);
+    /* Animated specular: offset the highlight mask so it sweeps across faces
+     * as the cube rotates, simulating a moving light reflection. */
+    {
+        float spec_u = s_angle * 0.3f;
+        float spec_v = s_angle * 0.15f;
+        glTexOffset(GL_TEXTURE2, spec_u, spec_v);
+    }
 
-    glActiveTexture(GL_TEXTURE0);
-    glPushMatrix();
-    /* Tumble about two axes so all faces/reflection are visible. */
-    glRotatef(s_angle, 0, 1, 0);
-    glRotatef(s_angle * 0.6f, 1, 0, 0);
-    cube(hs);
-    glPopMatrix();
+    // Compute viewer position in the cube's LOCAL frame.
+    //
+    // Scene modelview for the cube (OpenGL order reversed):
+    //   M = T(0,0,-3.5) * R_x(25) * R_y(s_angle) * R_y(s_angle) * R_x(0.6*a)
+    //
+    // World-space viewer is at origin (0,0,0).  In the cube's local frame:
+    //   viewer_local = inv(M) * (0,0,0)
+    //
+    // Step by step, working backward from world origin through the inverse
+    // of each transform in the chain:
+    //
+    // inv(T(0,0,-3.5)): (0,0,0) → (0,0,3.5)  [camera at +3.5 in eye space]
+    //
+    // Then inverse-rotate through: R_x(-25) → R_y(-a) → R_y(-a) → R_x(-0.6*a)
+    // where a = s_angle.
+    //
+    // For a distant viewer, the view direction is approximately parallel
+    // across the cube surface, so we place the eye at
+    //   eye = normalize(viewer_local) * 5.0
+    {
+        float a  = s_angle * 3.14159265f / 180.0f;
+        float ax = a * 0.6f;                        // cube X rotation
+        float ay = a;                               // cube Y rotation (scene yaw)
+        float px = 25.0f * 3.14159265f / 180.0f;   // scene pitch
 
-    /* Reset units 1+ to REPLACE so the small cube isn't multi-textured. */
+        float ca = __builtin_cosf(ax), sa = __builtin_sinf(ax);
+        float cb = __builtin_cosf(ay), sb = __builtin_sinf(ay);
+        float cp = __builtin_cosf(px), sp = __builtin_sinf(px);
+
+        // Start: viewer in eye space (after inv-T)
+        float vx = 0.0f, vy = 0.0f, vz = 3.5f;
+
+        // inv(R_x(25)) = R_x(-25): rotate around X by -25deg
+        // (vx, vy, vz) → (vx, vy*cp + vz*sp, -vy*sp + vz*cp)
+        { float t = vy; vy = t*cp + vz*sp; vz = -t*sp + vz*cp; }
+
+        // inv(R_y(s_angle)) = R_y(-a): rotate around Y by -a (scene yaw)
+        // (vx, vy, vz) → (vx*cb + vz*(-sb), vy, vx*sb + vz*cb)
+        { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
+
+        // inv(R_y(s_angle)) = R_y(-a): rotate around Y by -a (cube Y)
+        { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
+
+        // inv(R_x(0.6*a)) = R_x(-ax): rotate around X by -ax (cube X)
+        { float t = vy; vy = t*ca + vz*sa; vz = -t*sa + vz*ca; }
+
+        // Normalize view direction, place virtual viewer 5 units away
+        float len = __builtin_sqrtf(vx*vx + vy*vy + vz*vz);
+        if (len > 0.001f) { vx /= len; vy /= len; vz /= len; }
+        float eye_x = vx * 5.0f;
+        float eye_y = vy * 5.0f;
+        float eye_z = vz * 5.0f;
+
+        glActiveTexture(GL_TEXTURE0);
+        glPushMatrix();
+        glRotatef(s_angle, 0, 1, 0);
+        glRotatef(s_angle * 0.6f, 1, 0, 0);
+        cube(hs, eye_x, eye_y, eye_z);
+        glPopMatrix();
+    }
+
+    /* Reset units 1-2 to REPLACE so subsequent draws aren't multi-textured. */
     glActiveTexture(GL_TEXTURE1);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
     glActiveTexture(GL_TEXTURE2);
@@ -220,8 +279,6 @@ extern "C" void game_update(void)
     /* Skybox rotates slower than the cube. */
     s_sky_angle += 0.8f;
     if (s_sky_angle >= 360.0f) s_sky_angle -= 360.0f;
-    /* Slow vertical drift for the reflection overlay. */
-    s_scroll_v += 0.001f;
 
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glMatrixMode(GL_MODELVIEW);
