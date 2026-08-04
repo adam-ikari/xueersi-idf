@@ -87,22 +87,27 @@ enum {
     TEX_REFLECT  = 10,
 };
 
-// Available base textures in cycle order (LEFT/RIGHT to switch)
-static const int s_tex_pool[] = {
-    TEX_CERAMIC, TEX_CHECKER, TEX_BRICK, TEX_GRID, TEX_METAL, TEX_SAND,
+// ── Material presets ────────────────────────────────────
+// Each material is a complete triple: base texture + overlay1 + overlay2 with
+// appropriate weights for the material's look.
+struct material_t { int base; int ov1; int ov2; float w1; float w2; bool metal; };
+static const material_t s_materials[] = {
+    // base        overlay1     overlay2     w1     w2   metal?
+    { TEX_METAL,   TEX_REFLECT, TEX_SPECULAR, 1.0f,  1.2f, true  },  // 金属
+    { TEX_BRICK,   0,           0,            0.0f,  0.0f, false },  // 砖块
+    { TEX_SAND,    0,           0,            0.0f,  0.0f, false },  // 沙石
+    { TEX_CERAMIC, TEX_GRID,    TEX_REFLECT,  0.3f,  0.5f, false },  // 陶瓷
+    { TEX_CHECKER, TEX_REFLECT, 0,            0.6f,  0.0f, false },  // 棋盘
+    { TEX_GRID,    TEX_CHECKER, 0,            0.4f,  0.0f, false },  // 网格
+    { TEX_METAL,   TEX_BRICK,   TEX_SPECULAR, 0.8f,  0.6f, true  },  // 铁锈金属
 };
-static const int TEX_POOL_COUNT = sizeof(s_tex_pool) / sizeof(s_tex_pool[0]);
+static const int MATERIAL_COUNT = sizeof(s_materials) / sizeof(s_materials[0]);
+static int s_material_idx = 0;  /* current material index */
 
 // ── Global state ────────────────────────────────────────
 static float s_angle = 0.0f;       /* cube rotation (fast) */
 static float s_sky_angle = 0.0f;   /* skybox rotation (slower) */
-
-static int s_tex_base  = TEX_METAL;    /* current base texture */
-static int s_tex_ov1   = TEX_REFLECT;  /* overlay texture unit 1 */
-static int s_tex_ov2   = TEX_SPECULAR; /* overlay texture unit 2 */
-static float s_ov1_w   = 1.0f;         /* ADD weight for overlay 1 */
-static float s_ov2_w   = 1.2f;         /* ADD weight for overlay 2 */
-static int s_label_show = 0;           /* frames remaining for texture name label */
+static int s_label_show = 0;       /* frames remaining for texture name label */
 
 // ── Draw a cube of half-size hs, centred at origin ─────
 // eye_x/y/z: viewer position in the cube's LOCAL frame (only used for metal
@@ -187,37 +192,32 @@ static void draw_skybox(void)
 }
 
 // ── Draw the textured cube with configurable layers ─────
-// base_tex:      unit 0, REPLACE
-// ov1_tex/ov1_w: unit 1, ADD with weight (tex=0 to disable)
-// ov2_tex/ov2_w: unit 2, ADD with weight (tex=0 to disable)
-static void draw_cube(float hs, int base_tex,
-                      int ov1_tex, float ov1_w,
-                      int ov2_tex, float ov2_w)
+static void draw_cube(float hs, const material_t *mat)
 {
     /* Unit 0: base texture */
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, base_tex);
+    glBindTexture(GL_TEXTURE_2D, mat->base);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 
     /* Unit 1: overlay 1 (ADD) */
-    if (ov1_tex && ov1_w > 0.01f) {
+    if (mat->ov1 && mat->w1 > 0.01f) {
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, ov1_tex);
+        glBindTexture(GL_TEXTURE_2D, mat->ov1);
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, ov1_w, ov1_w, ov1_w, 1.0f);
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, mat->w1, mat->w1, mat->w1, 1.0f);
     } else {
         glActiveTexture(GL_TEXTURE1);
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
     }
 
     /* Unit 2: overlay 2 (ADD) */
-    if (ov2_tex && ov2_w > 0.01f) {
+    if (mat->ov2 && mat->w2 > 0.01f) {
         glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, ov2_tex);
+        glBindTexture(GL_TEXTURE_2D, mat->ov2);
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, ov2_w, ov2_w, ov2_w, 1.0f);
-        /* Animated specular sweep (only meaningful for specular overlay) */
-        if (ov2_tex == TEX_SPECULAR) {
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, mat->w2, mat->w2, mat->w2, 1.0f);
+        /* Animated specular sweep */
+        if (mat->ov2 == TEX_SPECULAR) {
             float su = s_angle * 0.3f;
             float sv = s_angle * 0.15f;
             glTexOffset(GL_TEXTURE2, su, sv);
@@ -228,12 +228,12 @@ static void draw_cube(float hs, int base_tex,
     }
 
     // Compute viewer position in the cube's LOCAL frame.
-    // For metal base: full inverse modelview for environment reflection.
-    // For other textures: fixed distant viewer (0,0,5) — no reflection needed.
+    // Metal materials: full inverse modelview for environment reflection.
+    // Non-metal: fixed distant viewer (0,0,5) — no reflection needed.
     {
         float eye_x = 0.0f, eye_y = 0.0f, eye_z = 5.0f;
 
-        if (base_tex == TEX_METAL) {
+        if (mat->metal) {
             float a  = s_angle * 3.14159265f / 180.0f;
             float ax = a * 0.6f;
             float ay = a;
@@ -289,7 +289,7 @@ extern "C" void game_init(void)
     glFlush();
 }
 
-// ── Consume key events and update texture state ────────
+// ── Consume key events ──────────────────────────────────
 static void handle_keys(void)
 {
     for (;;) {
@@ -301,58 +301,9 @@ static void handle_keys(void)
 
         if (edge != KEY_EDGE_DOWN) continue;  /* only act on press */
 
-        switch (btn) {
-        case BTN_LEFT: {
-            /* Cycle base texture backward */
-            int idx = 0;
-            for (int i = 0; i < TEX_POOL_COUNT; i++) {
-                if (s_tex_pool[i] == s_tex_base) { idx = i; break; }
-            }
-            idx = (idx - 1 + TEX_POOL_COUNT) % TEX_POOL_COUNT;
-            s_tex_base = s_tex_pool[idx];
-            s_label_show = 45;  /* show label for ~1.5s at 30fps */
-            break;
-        }
-        case BTN_RIGHT: {
-            /* Cycle base texture forward */
-            int idx = 0;
-            for (int i = 0; i < TEX_POOL_COUNT; i++) {
-                if (s_tex_pool[i] == s_tex_base) { idx = i; break; }
-            }
-            idx = (idx + 1) % TEX_POOL_COUNT;
-            s_tex_base = s_tex_pool[idx];
+        if (btn == BTN_A) {
+            s_material_idx = (s_material_idx + 1) % MATERIAL_COUNT;
             s_label_show = 45;
-            break;
-        }
-        case BTN_A:
-            /* Toggle overlay 1: reflect → none → grid → checker → reflect */
-            if      (s_tex_ov1 == 0)         s_tex_ov1 = TEX_REFLECT;
-            else if (s_tex_ov1 == TEX_REFLECT) s_tex_ov1 = TEX_GRID;
-            else if (s_tex_ov1 == TEX_GRID)    s_tex_ov1 = TEX_CHECKER;
-            else                             s_tex_ov1 = 0;
-            s_label_show = 30;
-            break;
-        case BTN_B:
-            /* Toggle overlay 2: specular → none → brick → ceramic → specular */
-            if      (s_tex_ov2 == 0)           s_tex_ov2 = TEX_SPECULAR;
-            else if (s_tex_ov2 == TEX_SPECULAR) s_tex_ov2 = TEX_BRICK;
-            else if (s_tex_ov2 == TEX_BRICK)    s_tex_ov2 = TEX_CERAMIC;
-            else                              s_tex_ov2 = 0;
-            s_label_show = 30;
-            break;
-        case BTN_UP:
-            /* Increase overlay 1 weight */
-            s_ov1_w += 0.1f;
-            if (s_ov1_w > 2.0f) s_ov1_w = 2.0f;
-            if (s_tex_ov1 == 0) s_tex_ov1 = TEX_REFLECT;  /* auto-enable */
-            s_label_show = 20;
-            break;
-        case BTN_DOWN:
-            /* Decrease overlay 1 weight */
-            s_ov1_w -= 0.1f;
-            if (s_ov1_w < 0.0f) s_ov1_w = 0.0f;
-            s_label_show = 20;
-            break;
         }
     }
 }
@@ -383,8 +334,8 @@ extern "C" void game_update(void)
     glRotatef(25, 1, 0, 0);
     glRotatef(s_angle, 0, 1, 0);
 
-    /* Draw the cube with current texture config */
-    draw_cube(0.8f, s_tex_base, s_tex_ov1, s_ov1_w, s_tex_ov2, s_ov2_w);
+    /* Draw the cube with current material */
+    draw_cube(0.8f, &s_materials[s_material_idx]);
 
     glFlush();
 }
