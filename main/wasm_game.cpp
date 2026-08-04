@@ -38,6 +38,25 @@ IMPORT(void, glClear, int mask);
 IMPORT(void, glFlush);
 IMPORT(int,  game_get_key);
 
+/* ── New: Lighting / Materials ── */
+IMPORT(void, glMaterialfv, int mode, int type, float v0, float v1, float v2, float v3);
+IMPORT(void, glMaterialf,  int mode, int type, float v);
+IMPORT(void, glLightfv,    int light, int type, float v0, float v1, float v2, float v3);
+IMPORT(void, glLightModeli, int pname, int param);
+IMPORT(void, glColorMaterial, int mode, int type);
+
+/* ── New: Transform / View ── */
+IMPORT(void, glScalef,    float x, float y, float z);
+IMPORT(void, glViewport,  int x, int y, int w, int h);
+IMPORT(void, glFrustum,   double l, double r, double b, double t, double n, double f);
+IMPORT(void, glShadeModel, int mode);
+
+/* ── New: Blend ── */
+IMPORT(void, glBlendFunc, int sfactor, int dfactor);
+
+/* ── New: Clear ── */
+IMPORT(void, glClearColor, float r, float g, float b, float a);
+
 // ── GL constants ────────────────────────────────────────
 enum {
     GL_QUADS             = 0x0007,
@@ -46,6 +65,7 @@ enum {
     GL_LIGHTING          = 0x0B50,
     GL_LIGHT0            = 0x4000,
     GL_MODELVIEW         = 0x1700,
+    GL_PROJECTION        = 0x1701,
     GL_TEXTURE0          = 0x84C0,
     GL_TEXTURE1          = 0x84C1,
     GL_TEXTURE2          = 0x84C2,
@@ -57,6 +77,30 @@ enum {
     GL_REPLACE           = 0x1E01,
     GL_COLOR_BUFFER_BIT  = 0x00004000,
     GL_DEPTH_BUFFER_BIT  = 0x00000100,
+
+    /* ── Lighting / Materials ── */
+    GL_AMBIENT            = 0x1200,
+    GL_DIFFUSE            = 0x1201,
+    GL_SPECULAR           = 0x1202,
+    GL_EMISSION           = 0x1600,
+    GL_SHININESS          = 0x1601,
+    GL_POSITION           = 0x1203,
+    GL_AMBIENT_AND_DIFFUSE = 0x1602,
+    GL_LIGHT_MODEL_LOCAL_VIEWER = 0x0B51,
+    GL_LIGHT_MODEL_TWO_SIDE     = 0x0B52,
+    GL_COLOR_MATERIAL     = 0x0B57,
+    GL_FRONT_AND_BACK     = 0x0408,
+
+    /* ── Shading ── */
+    GL_FLAT   = 0x1D00,
+    GL_SMOOTH = 0x1D01,
+
+    /* ── Blend ── */
+    GL_BLEND              = 0x0BE2,
+    GL_SRC_ALPHA          = 0x0302,
+    GL_ONE_MINUS_SRC_ALPHA = 0x0303,
+    GL_ZERO               = 0,
+    GL_ONE                = 1,
 };
 
 // ── Key event encoding (matches wasm_game.c) ────────────
@@ -280,6 +324,18 @@ extern "C" void game_init(void)
     glEnable(GL_CULL_FACE);
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
+
+    /* Position light above and to the front-right */
+    glLightfv(GL_LIGHT0, GL_POSITION, 1.5f, 2.0f, -2.0f, 0.0f);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE,  1.0f, 0.95f, 0.9f, 1.0f);
+
+    /* Enable per-vertex color tracking for material ambient/diffuse */
+    glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
+    glEnable(GL_COLOR_MATERIAL);
+
+    /* Dark gray clear color (dark sky look) */
+    glClearColor(0.08f, 0.08f, 0.12f, 1.0f);
+
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     glFlush();

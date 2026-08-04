@@ -87,6 +87,17 @@ static inline float read_f32(const uint8_t **p) {
     return v;
 }
 
+static inline double read_f64(const uint8_t **p) {
+    double v;
+    uint64_t raw;
+    uint32_t lo, hi;
+    lo = read_u32(p);
+    hi = read_u32(p);
+    raw = ((uint64_t)hi << 32) | lo;
+    memcpy(&v, &raw, 8);
+    return v;
+}
+
 /* ── Decoder (core 1) ───────────────────────────────────── */
 
 uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
@@ -187,6 +198,70 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
         case GLCMD_CLEAR:
             glClear((GLint)read_u32(&p));
             break;
+
+        /* ── Lighting / Materials ── */
+        case GLCMD_MATERIAL_FV: {
+            GLint mode = (GLint)read_u32(&p);
+            GLint type = (GLint)read_u32(&p);
+            GLfloat params[4] = { read_f32(&p), read_f32(&p), read_f32(&p), read_f32(&p) };
+            glMaterialfv(mode, type, params);
+            break;
+        }
+        case GLCMD_MATERIAL_F: {
+            GLint mode = (GLint)read_u32(&p);
+            GLint type = (GLint)read_u32(&p);
+            GLfloat param = read_f32(&p);
+            glMaterialf(mode, type, param);
+            break;
+        }
+        case GLCMD_LIGHT_FV: {
+            GLint light = (GLint)read_u32(&p);
+            GLint type  = (GLint)read_u32(&p);
+            GLfloat params[4] = { read_f32(&p), read_f32(&p), read_f32(&p), read_f32(&p) };
+            glLightfv(light, type, params);
+            break;
+        }
+        case GLCMD_LIGHT_MODEL_I: {
+            GLint pname = (GLint)read_u32(&p);
+            GLint param = (GLint)read_u32(&p);
+            glLightModeli(pname, param);
+            break;
+        }
+        case GLCMD_COLOR_MATERIAL: {
+            GLint mode = (GLint)read_u32(&p);
+            GLint type = (GLint)read_u32(&p);
+            glColorMaterial(mode, type);
+            break;
+        }
+
+        /* ── Transform / View ── */
+        case GLCMD_SCALE_F:
+            glScalef(read_f32(&p), read_f32(&p), read_f32(&p));
+            break;
+        case GLCMD_VIEWPORT:
+            glViewport((GLint)read_u32(&p), (GLint)read_u32(&p),
+                       (GLint)read_u32(&p), (GLint)read_u32(&p));
+            break;
+        case GLCMD_FRUSTUM: {
+            GLdouble l = read_f64(&p), r = read_f64(&p), b = read_f64(&p);
+            GLdouble t = read_f64(&p), n = read_f64(&p), f = read_f64(&p);
+            glFrustum(l, r, b, t, n, f);
+            break;
+        }
+        case GLCMD_SHADE_MODEL:
+            glShadeModel((GLint)read_u32(&p));
+            break;
+
+        /* ── Blend ── */
+        case GLCMD_BLEND_FUNC:
+            glBlendFunc((GLint)read_u32(&p), (GLint)read_u32(&p));
+            break;
+
+        /* ── Clear ── */
+        case GLCMD_CLEAR_COLOR:
+            glClearColor(read_f32(&p), read_f32(&p), read_f32(&p), read_f32(&p));
+            break;
+
         case GLCMD_NOP:
         default:
             break;

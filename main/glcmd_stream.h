@@ -52,6 +52,25 @@ enum {
     GLCMD_DEPTH_MASK,       // u32 flag
     GLCMD_CLEAR,            // u32 mask
 
+    /* ─ New: Lighting / Materials ─ */
+    GLCMD_MATERIAL_FV,      // u32 mode, u32 type, f32[4] params
+    GLCMD_MATERIAL_F,       // u32 mode, u32 type, f32 param
+    GLCMD_LIGHT_FV,         // u32 light, u32 type, f32[4] params
+    GLCMD_LIGHT_MODEL_I,    // u32 pname, u32 param
+    GLCMD_COLOR_MATERIAL,   // u32 mode, u32 type
+
+    /* ─ New: Transform / View ─ */
+    GLCMD_SCALE_F,          // f32 x, y, z
+    GLCMD_VIEWPORT,         // u32 x, y, w, h
+    GLCMD_FRUSTUM,          // f64 left, right, bottom, top, near, far (6 doubles)
+    GLCMD_SHADE_MODEL,      // u32 mode
+
+    /* ─ New: Blend ─ */
+    GLCMD_BLEND_FUNC,       // u32 sfactor, u32 dfactor
+
+    /* ─ New: Clear ─ */
+    GLCMD_CLEAR_COLOR,      // f32 r, g, b, a
+
     GLCMD_COUNT
 };
 

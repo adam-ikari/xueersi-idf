@@ -68,6 +68,49 @@ static void host_glDepthMask(wasm_exec_env_t env, int32_t flag)
 { GLW_EMPTY(env); glcmd_u8(GLCMD_DEPTH_MASK); glcmd_u32((uint32_t)flag); }
 static void host_glClear(wasm_exec_env_t env, int32_t mask)
 { GLW_EMPTY(env); glcmd_u8(GLCMD_CLEAR); glcmd_u32((uint32_t)mask); }
+
+/* ── Lighting / Materials (new) ── */
+static void host_glMaterialfv(wasm_exec_env_t env, int32_t mode, int32_t type,
+                              float v0, float v1, float v2, float v3)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_MATERIAL_FV); glcmd_u32((uint32_t)mode);
+  glcmd_u32((uint32_t)type); glcmd_f32(v0); glcmd_f32(v1); glcmd_f32(v2); glcmd_f32(v3); }
+static void host_glMaterialf(wasm_exec_env_t env, int32_t mode, int32_t type, float v)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_MATERIAL_F); glcmd_u32((uint32_t)mode);
+  glcmd_u32((uint32_t)type); glcmd_f32(v); }
+static void host_glLightfv(wasm_exec_env_t env, int32_t light, int32_t type,
+                           float v0, float v1, float v2, float v3)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_LIGHT_FV); glcmd_u32((uint32_t)light);
+  glcmd_u32((uint32_t)type); glcmd_f32(v0); glcmd_f32(v1); glcmd_f32(v2); glcmd_f32(v3); }
+static void host_glLightModeli(wasm_exec_env_t env, int32_t pname, int32_t param)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_LIGHT_MODEL_I); glcmd_u32((uint32_t)pname); glcmd_u32((uint32_t)param); }
+static void host_glColorMaterial(wasm_exec_env_t env, int32_t mode, int32_t type)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_COLOR_MATERIAL); glcmd_u32((uint32_t)mode); glcmd_u32((uint32_t)type); }
+
+/* ── Transform / View (new) ── */
+static void host_glScalef(wasm_exec_env_t env, float x, float y, float z)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_SCALE_F); glcmd_f32(x); glcmd_f32(y); glcmd_f32(z); }
+static void host_glViewport(wasm_exec_env_t env, int32_t x, int32_t y, int32_t w, int32_t h)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_VIEWPORT); glcmd_u32((uint32_t)x); glcmd_u32((uint32_t)y);
+  glcmd_u32((uint32_t)w); glcmd_u32((uint32_t)h); }
+static void host_glFrustum(wasm_exec_env_t env, double l, double r, double b, double t, double n, double f)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_FRUSTUM);
+  uint64_t raw; memcpy(&raw, &l, 8); glcmd_u32((uint32_t)(raw)); glcmd_u32((uint32_t)(raw >> 32));
+  memcpy(&raw, &r, 8); glcmd_u32((uint32_t)(raw)); glcmd_u32((uint32_t)(raw >> 32));
+  memcpy(&raw, &b, 8); glcmd_u32((uint32_t)(raw)); glcmd_u32((uint32_t)(raw >> 32));
+  memcpy(&raw, &t, 8); glcmd_u32((uint32_t)(raw)); glcmd_u32((uint32_t)(raw >> 32));
+  memcpy(&raw, &n, 8); glcmd_u32((uint32_t)(raw)); glcmd_u32((uint32_t)(raw >> 32));
+  memcpy(&raw, &f, 8); glcmd_u32((uint32_t)(raw)); glcmd_u32((uint32_t)(raw >> 32)); }
+static void host_glShadeModel(wasm_exec_env_t env, int32_t mode)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_SHADE_MODEL); glcmd_u32((uint32_t)mode); }
+
+/* ── Blend (new) ── */
+static void host_glBlendFunc(wasm_exec_env_t env, int32_t sfactor, int32_t dfactor)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_BLEND_FUNC); glcmd_u32((uint32_t)sfactor); glcmd_u32((uint32_t)dfactor); }
+
+/* ── Clear (new) ── */
+static void host_glClearColor(wasm_exec_env_t env, float r, float g, float b, float a)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_CLEAR_COLOR); glcmd_f32(r); glcmd_f32(g); glcmd_f32(b); glcmd_f32(a); }
+
 static void host_glFlush(wasm_exec_env_t env)
 { GLW_EMPTY(env); glcmd_publish(); glcmd_begin_frame(); }
 
@@ -130,6 +173,26 @@ static NativeSymbol gl_natives[] = {
     { "glDisable",       (void *)host_glDisable,       "(i)",      NULL },
     { "glDepthMask",     (void *)host_glDepthMask,     "(i)",      NULL },
     { "glClear",         (void *)host_glClear,         "(i)",      NULL },
+
+    /* ── Lighting / Materials ── */
+    { "glMaterialfv",    (void *)host_glMaterialfv,    "(iiffff)", NULL },
+    { "glMaterialf",     (void *)host_glMaterialf,     "(iif)",    NULL },
+    { "glLightfv",       (void *)host_glLightfv,       "(iiffff)", NULL },
+    { "glLightModeli",   (void *)host_glLightModeli,   "(ii)",     NULL },
+    { "glColorMaterial", (void *)host_glColorMaterial, "(ii)",     NULL },
+
+    /* ── Transform / View ── */
+    { "glScalef",        (void *)host_glScalef,        "(fff)",    NULL },
+    { "glViewport",      (void *)host_glViewport,      "(iiii)",   NULL },
+    { "glFrustum",       (void *)host_glFrustum,       "(FFFFFF)", NULL },
+    { "glShadeModel",    (void *)host_glShadeModel,    "(i)",      NULL },
+
+    /* ── Blend ── */
+    { "glBlendFunc",     (void *)host_glBlendFunc,     "(ii)",     NULL },
+
+    /* ── Clear ── */
+    { "glClearColor",    (void *)host_glClearColor,    "(ffff)",   NULL },
+
     { "glFlush",         (void *)host_glFlush,         "()",       NULL },
     { "cosf",            (void *)host_cosf,            "(f)f",     NULL },
     { "sinf",            (void *)host_sinf,            "(f)f",     NULL },
