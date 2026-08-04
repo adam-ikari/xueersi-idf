@@ -179,93 +179,172 @@ def gen_sand(width: int, height: int) -> bytearray:
 
 
 def gen_metal(width: int, height: int) -> bytearray:
-    """Metallic base: cool steel gradient with brushed streaks.
+    """Metallic base texture using Blinn-Phong specular reflection.
 
-    Kept on the darker side so the ADD reflection + specular layers have
-    headroom before clamping (otherwise the cube saturates to white and the
-    specular highlight is invisible)."""
+    Precomputes a physically-based metal surface:
+    - Dark steel base with brushed anisotropy
+    - Blinn-Phong specular highlight: pow(N·H, shininess) with
+      H = normalize(V + L) baked into the texture for a directional light
+      above-left (~45deg), viewer at normal incidence.
+    - Edge darkening (Fresnel-like) for increased depth.
+
+    Kept dark so the ADD pass with reflect/specular textures has headroom."""
+    import math
     buf = bytearray(width * height * 3)
+    cx, cy = width / 2.0, height / 2.0
+
+    # Light direction (above-left-front, normalized)
+    lx, ly, lz = -0.4, -0.5, 0.77   # unit vector ~ (-0.4, -0.5, 0.77)
+    ll = math.sqrt(lx*lx + ly*ly + lz*lz)
+    lx /= ll; ly /= ll; lz /= ll
+
+    # Viewer at normal incidence (0, 0, 1).  Half-vector H = normalize(V + L)
+    hx, hy, hz = lx, ly, lz + 1.0
+    hl = math.sqrt(hx*hx + hy*hy + hz*hz)
+    hx /= hl; hy /= hl; hz /= hl
+
+    shininess = 64.0   # Blinn-Phong exponent (metal = high)
+
     for y in range(height):
-        base = 70 + (y * 50 // height)
+        # Brushed steel gradient with subtle vertical streaks
+        base = 35 + (y * 35 // height)
         for x in range(width):
             streak = ((x * 31 + y * 7) & 15) - 8
-            r = max(0, min(255, base + streak))
-            g = max(0, min(255, base + streak))
-            b = max(0, min(255, base + streak + 10))
+
+            # Map pixel (x, y) to a local surface normal on the sphere
+            # (simulating a convex spherical highlight patch)
+            dx = (x - cx) / cx        # [-1, 1]
+            dy = (y - cy) / cy        # [-1, 1]
+            d2 = dx*dx + dy*dy
+            if d2 < 1.0:
+                # Sphere normal at this point: n = (dx, dy, sqrt(1-d²))
+                nz = math.sqrt(1.0 - d2)
+                ndot_h = dx * hx + dy * hy + nz * hz
+                if ndot_h < 0.0:
+                    ndot_h = 0.0
+                spec = ndot_h ** shininess
+                # Edge darkening: cos(theta) = nz
+                fresnel = 0.6 + 0.4 * (1.0 - nz)  # edge ~1.0, center ~0.6
+            else:
+                spec = 0.0
+                fresnel = 1.0
+
+            r = max(0, min(255, base + streak + int(spec * 180.0 * fresnel)))
+            g = max(0, min(255, base + streak + int(spec * 180.0 * fresnel)))
+            b = max(0, min(255, base + streak + int(spec * 200.0 * fresnel) + 6))
+
             i = (y * width + x) * 3
             buf[i] = r; buf[i+1] = g; buf[i+2] = b
     return buf
 
 
 def gen_specular(width: int, height: int) -> bytearray:
-    """Specular highlight mask: bright radial blob on black."""
+    """Specular highlight mask: Blinn-Phong reflection lobe on black.
+
+    Maps a spherical surface normal across the texture UV space, computing
+    pow(N·H, shininess) where H is the half-angle for a viewer at (0,0,1)
+    and light above-left. Result is a concentrated highlight ring for the
+    ADD multi-texture pass."""
+    import math
     buf = bytearray(width * height * 3)
-    cx, cy = width // 2, height // 2
-    maxd2 = cx * cx + cy * cy
+    cx, cy = width / 2.0, height / 2.0
+
+    # Light above-left, viewer at normal
+    lx, ly, lz = -0.45, -0.55, 0.70
+    ll = math.sqrt(lx*lx + ly*ly + lz*lz)
+    lx /= ll; ly /= ll; lz /= ll
+    hx, hy, hz = lx, ly, lz + 1.0
+    hl = math.sqrt(hx*hx + hy*hy + hz*hz)
+    hx /= hl; hy /= hl; hz /= hl
+
+    shininess = 128.0   # sharper than metal base for a tight highlight
+
     for y in range(height):
         for x in range(width):
-            d2 = (x - cx)**2 + (y - cy)**2
-            f = 1.0 - d2 / maxd2
-            if f < 0.0:
-                f = 0.0
-            v = int(f * f * 255)
+            dx = (x - cx) / cx
+            dy = (y - cy) / cy
+            d2 = dx*dx + dy*dy
+            if d2 < 1.0:
+                nz = math.sqrt(1.0 - d2)
+                ndot_h = dx * hx + dy * hy + nz * hz
+                if ndot_h < 0.0:
+                    ndot_h = 0.0
+                v = int((ndot_h ** shininess) * 255.0)
+            else:
+                v = 0
             i = (y * width + x) * 3
             buf[i] = v; buf[i+1] = v; buf[i+2] = v
     return buf
 
 
 def gen_reflect(width: int, height: int) -> bytearray:
-    """Desert environment reflection: blue sky + clouds above, sand below.
+    """Environment reflection map: spherical projection of sky + desert ground.
 
-    Used as the metal cube's ADD reflection overlay — matches the skybox."""
+    UV mapped as a sphere-map: u = (R.x+1)/2, v = (R.z+1)/2 where R is the
+    reflected view vector. For a cube face-normal viewer, this gives sky
+    reflection near the top and ground near the bottom, with a smooth horizon.
+
+    The texture is radially symmetric around the center, matching the
+    Blinn-Phong specular lobe so that the combined effect (base metal +
+    reflect ADD + specular ADD) reads as polished metal."""
+    import math
     buf = bytearray(width * height * 3)
-    horizon = 0.5
-    band = 0.05
-    clouds = [
-        (0.30, 0.75, 0.16, 0.20),
-        (0.65, 0.60, 0.20, 0.14),
-        (0.50, 0.85, 0.18, 0.12),
-        (0.85, 0.70, 0.13, 0.16),
-        (0.15, 0.65, 0.15, 0.13),
-    ]
+    cx, cy = width / 2.0, height / 2.0
+    max_r = min(cx, cy)
+
+    # Sky colors
+    sky_top_r, sky_top_g, sky_top_b = 60, 100, 180     # deep blue
+    sky_hor_r, sky_hor_g, sky_hor_b = 150, 190, 230    # horizon blue-white
+    ground_r, ground_g, ground_b = 210, 170, 110        # desert sand
+
     for y in range(height):
-        v = y / height
         for x in range(width):
-            u = x / width
-            if v < horizon - band:
-                n = ((x * 13 + y * 29) & 15) - 8
-                r, g, b = 214 + n, 182 + n, 132 + n
-            else:
-                t = (v - horizon) / (1.0 - horizon)
-                if t < 0.0:
-                    t = 0.0
-                sr = 70 + 60 * t
-                sg = 120 + 60 * t
-                sb = 190 + 40 * t
-                cloud = 0.0
-                for (cx, cy, rx, ry) in clouds:
-                    dx = (u - cx) / rx
-                    dy = (v - cy) / ry
-                    d2 = dx * dx + dy * dy
-                    if d2 < 1.0:
-                        cloud += (1.0 - d2) * (1.0 - d2)
-                if cloud > 1.0:
-                    cloud = 1.0
-                sr += (255 - sr) * cloud
-                sg += (255 - sg) * cloud
-                sb += (255 - sb) * cloud
-                if v < horizon + band:
-                    f = (v - (horizon - band)) / (2 * band)
-                    n = ((x * 13 + y * 29) & 15) - 8
-                    r = (214 + n) * (1 - f) + sr * f
-                    g = (182 + n) * (1 - f) + sg * f
-                    b = (132 + n) * (1 - f) + sb * f
+            dx = (x - cx) / max_r
+            dy = (y - cy) / max_r
+
+            # Sphere-map: reflected view vector R at pixel (dx, dy)
+            # For a sphere-map: r² = dx² + dy², and R.z = 1 - r²
+            r2 = dx*dx + dy*dy
+            if r2 < 1.0:
+                # R = (dx, dy, 1 - r2) normalized
+                rz = 1.0 - r2  # actually this IS rz unnormalized since nz=1
+                # Compute normalized R from the sphere-map projection
+                inv_len = 1.0 / math.sqrt(r2 + rz*rz)
+                dx_n = dx * inv_len
+                dy_n = dy * inv_len
+                rz_n = rz * inv_len
+
+                # Use R.y (vertical component) for sky/ground blending
+                ry = dy_n  # [-1, 1]  (-1 = ground, +1 = sky)
+
+                if ry > 0.0:
+                    # Sky side — blend deep blue → horizon white
+                    t = ry   # 0 (horizon) → 1 (zenith)
+                    r = int(sky_hor_r + (sky_top_r - sky_hor_r) * t)
+                    g = int(sky_hor_g + (sky_top_g - sky_hor_g) * t)
+                    b = int(sky_hor_b + (sky_top_b - sky_hor_b) * t)
                 else:
-                    r, g, b = sr, sg, sb
+                    # Ground side — sand
+                    t = -ry   # 0 (horizon) → 1 (nadir)
+                    r = int(ground_r - 30 * t)
+                    g = int(ground_g - 40 * t)
+                    b = int(ground_b - 35 * t)
+
+                # Fade near the mirror edge (horizon blur)
+                edge = 1.0 - r2   # 0 at edge, 1 at center
+                if edge < 0.15:
+                    f = edge / 0.15
+                    r = int(f * r + (1 - f) * sky_hor_r)
+                    g = int(f * g + (1 - f) * sky_hor_g)
+                    b = int(f * b + (1 - f) * sky_hor_b)
+            else:
+                # Outside the sphere — horizon blue
+                r, g, b = sky_hor_r, sky_hor_g, sky_hor_b
+
             i = (y * width + x) * 3
-            buf[i] = max(0, min(255, int(r)))
-            buf[i + 1] = max(0, min(255, int(g)))
-            buf[i + 2] = max(0, min(255, int(b)))
+            buf[i] = max(0, min(255, r))
+            buf[i+1] = max(0, min(255, g))
+            buf[i+2] = max(0, min(255, b))
     return buf
 
 
