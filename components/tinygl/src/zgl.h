@@ -449,6 +449,7 @@ void gl_shade_vertex(GLVertex* v);
 
 void glInitTextures();
 void glEndTextures();
+GLTexture* find_texture(GLint h);
 GLTexture* alloc_texture(GLint h);
 
 /* image_util.c */

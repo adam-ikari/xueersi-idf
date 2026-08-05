@@ -528,13 +528,16 @@ void glTexImage1D(GLint target, GLint level, GLint components, GLint width, GLin
 }
 
 void glBindTexture(GLint target, GLint texture) {
-	GLParam p[3];
-#include "error_check_no_context.h"
-	p[0].op = OP_BindTexture;
-	p[1].i = target;
-	p[2].i = texture;
-
-	gl_add_op(p);
+	GLContext *c = gl_get_context();
+	GLTexture *t = find_texture(texture);
+	if (t == NULL) {
+		t = alloc_texture(texture);
+	}
+	if (t == NULL) {
+		gl_fatal_error("GL_OUT_OF_MEMORY");
+	}
+	c->current_texture = t;
+	c->tex_unit[c->active_texture_unit].texture = t;
 }
 
 void glActiveTexture(GLenum texture) {

@@ -394,8 +394,8 @@ def gen_reflect(width: int, height: int) -> bytearray:
             v = 2.0 * t - 1.0
             r2 = u * u + v * v
 
-            if r2 < 1.0001:
-                f = 2.0 * math.sqrt(1.0 - r2)
+            if r2 < 0.2501:
+                f = 4.0 * math.sqrt(1.0 - 4.0 * r2)
                 ry = v * f  # R.y in [-1,1]: +1=zenith(sky), -1=nadir(ground), 0=horizon
 
                 if ry > 0.0:
@@ -411,7 +411,7 @@ def gen_reflect(width: int, height: int) -> bytearray:
                     g = int(sky_hor_g + (ground_g - sky_hor_g) * blend)
                     b = int(sky_hor_b + (ground_b - sky_hor_b) * blend)
             else:
-                # Outside the unit disc — never sampled, fill horizon blue.
+                # Outside the valid disc (r2 >= 1/4) — fill horizon blue.
                 r, g, b = sky_hor_r, sky_hor_g, sky_hor_b
 
             i = (y * width + x) * 3
