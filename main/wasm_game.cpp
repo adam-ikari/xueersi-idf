@@ -384,11 +384,16 @@ extern "C" void game_update(void)
     glRotatef(s_sky_angle, 0, 1, 0);
     draw_skybox();
 
-    /* Scene camera */
+    /* Scene camera — FIXED (translate + constant tilt). The cube owns all
+     * rotation. Previously the camera also yawed by s_angle, which cancelled
+     * the cube's own s_angle yaw → the eye-space normal barely changed, so
+     * the sphere-map reflection and the Blinn-Phong specular (both computed
+     * from the eye-space normal) appeared stuck. A fixed camera lets the
+     * cube's spin actually show up in eye space, so reflection and specular
+     * walk across the faces as the cube turns. */
     glLoadIdentity();
     glTranslatef(0, 0, -3.5f);
     glRotatef(25, 1, 0, 0);
-    glRotatef(s_angle, 0, 1, 0);
 
     /* Draw the cube with current material */
     draw_cube(0.8f, &s_materials[s_material_idx]);
