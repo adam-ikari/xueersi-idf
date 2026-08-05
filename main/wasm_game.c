@@ -6,7 +6,13 @@
  * The wasm calls GL lookalikes; the host natives encode them into the
  * glcmd_stream, which core 1 replays against the real TinyGL context.
  * WAMR runtime memory (module, linear memory, exec_env stack) is allocated
- * entirely from PSRAM — it is not a performance hotspot.
+ * entirely from PSRAM via custom allocator — it is not a performance hotspot.
+ * SRAM is left for the TinyGL render pipeline.
+ *
+ * Strategy: Alloc_With_Allocator + heap_caps_malloc(MALLOC_CAP_SPIRAM).
+ * This bypasses os_malloc's 12-byte overhead + double-alignment that
+ * conflicts with ESP-IDF's PSRAM TLSF heap. WAMR calls our allocator
+ * directly, so there is no extra alignment wrapper.
  */
 #include "wasm_export.h"
 #include "esp_log.h"
@@ -200,20 +206,28 @@ static NativeSymbol gl_natives[] = {
 };
 #define GL_NATIVES_COUNT (sizeof(gl_natives) / sizeof(gl_natives[0]))
 
-/* ── WAMR allocator: runtime memory → PSRAM (not a hot spot) ───────────── */
-static void *wamr_malloc(size_t size)
+/* ── PSRAM custom allocator for WAMR (avoids os_malloc double-alignment) ───
+ * When Alloc_With_Allocator is used, WAMR calls these directly instead of
+ * os_malloc → malloc, so there is no 12-byte overhead / double-alignment
+ * conflict with ESP-IDF's PSRAM heap. This keeps SRAM free for TinyGL.
+ *
+ * WAMR's internal GC heap init (ems_kfc.c) requires 8-byte alignment on
+ * the struct_buf and pool_buf it receives. heap_caps_malloc only guarantees
+ * 4-byte on ESP32, so we over-allocate and manually align up.
+ *
+ * MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT: SPRAM preferred, SRAM as fallback. */
+static void *wamr_psram_malloc(unsigned int size)
 {
-    /* WAMR requires 8-byte aligned heap structures. PSRAM heap_caps_malloc
-     * guarantees only 4 bytes on ESP32. Align manually. */
+    if (size == 0) size = 1;
     void *p = heap_caps_malloc(size + 8, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!p) return NULL;
     uintptr_t a = ((uintptr_t)p + 8) & ~(uintptr_t)7;
     ((void **)a)[-1] = p;
     return (void *)a;
 }
-static void *wamr_realloc(void *ptr, size_t size)
+static void *wamr_psram_realloc(void *ptr, unsigned int size)
 {
-    if (!ptr) return wamr_malloc(size);
+    if (!ptr) return wamr_psram_malloc(size);
     void *old_base = ((void **)ptr)[-1];
     void *p = heap_caps_realloc(old_base, size + 8, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!p) return NULL;
@@ -221,7 +235,7 @@ static void *wamr_realloc(void *ptr, size_t size)
     ((void **)a)[-1] = p;
     return (void *)a;
 }
-static void wamr_free(void *ptr)
+static void wamr_psram_free(void *ptr)
 {
     if (ptr) heap_caps_free(((void **)ptr)[-1]);
 }
@@ -234,9 +248,9 @@ void wasm_game_task(void *arg)
 
     RuntimeInitArgs init_args = { 0 };
     init_args.mem_alloc_type = Alloc_With_Allocator;
-    init_args.mem_alloc_option.allocator.malloc_func  = wamr_malloc;
-    init_args.mem_alloc_option.allocator.realloc_func = wamr_realloc;
-    init_args.mem_alloc_option.allocator.free_func    = wamr_free;
+    init_args.mem_alloc_option.allocator.malloc_func  = wamr_psram_malloc;
+    init_args.mem_alloc_option.allocator.realloc_func = wamr_psram_realloc;
+    init_args.mem_alloc_option.allocator.free_func    = wamr_psram_free;
     init_args.native_module_name = "env";
     init_args.native_symbols     = gl_natives;
     init_args.n_native_symbols   = (uint32_t)GL_NATIVES_COUNT;
@@ -246,9 +260,6 @@ void wasm_game_task(void *arg)
         return;
     }
     ESP_LOGI(TAG, "Host GL functions linked (%d)", GL_NATIVES_COUNT);
-    ESP_LOGI(TAG, "heap: internal_free=%u psram_free=%u (WAMR runtime→PSRAM allocator)",
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
 
     char err[128] = { 0 };
     wasm_module_t mod = wasm_runtime_load((uint8_t *)wasm_game_wasm,

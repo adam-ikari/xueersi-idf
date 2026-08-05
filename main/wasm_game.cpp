@@ -175,9 +175,10 @@ static void cube(float hs, float eye_x, float eye_y, float eye_z)
             float nd = F[f].n[0]*ix + F[f].n[1]*iy + F[f].n[2]*iz;
             float rx = ix - 2*nd*F[f].n[0];
             float ry = iy - 2*nd*F[f].n[1];
-            // sphere-map: s from Rx, t from Ry (up = sky, down = sand)
+            // sphere-map: s from Rx, t from Ry
+            // (ry>0 = pointing up = should reflect sky = top of texture = t small)
             float s = (rx + 1) * 0.5f;
-            float t = (ry + 1) * 0.5f;
+            float t = (1 - ry) * 0.5f;
             if (s < 0) s = 0; else if (s > 1) s = 1;
             if (t < 0) t = 0; else if (t > 1) t = 1;
             glNormal3f(F[f].n[0], F[f].n[1], F[f].n[2]);
@@ -325,13 +326,23 @@ extern "C" void game_init(void)
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
 
-    /* Position light above and to the front-right */
-    glLightfv(GL_LIGHT0, GL_POSITION, 1.5f, 2.0f, -2.0f, 0.0f);
-    glLightfv(GL_LIGHT0, GL_DIFFUSE,  1.0f, 0.95f, 0.9f, 1.0f);
+    /* Directional light from front-above-right: brightens all visible faces
+     * with a warm-white tint. Normalised dir ≈ (0.64, 0.53, 0.55). */
+    glLightfv(GL_LIGHT0, GL_POSITION, 3.0f, 2.5f, 2.6f, 0.0f);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE,  1.0f, 1.0f, 1.0f, 1.0f);
+    glLightfv(GL_LIGHT0, GL_SPECULAR, 1.0f, 1.0f, 1.0f, 1.0f);
 
-    /* Enable per-vertex color tracking for material ambient/diffuse */
+    /* Default material: bright diffuse, strong specular highlight */
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,   0.4f, 0.4f, 0.4f, 1.0f);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,   0.2f, 0.2f, 0.2f, 1.0f);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR,  0.7f, 0.7f, 0.7f, 1.0f);
+    glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 60.0f);
+
+    /* Enable per-vertex color tracking so cube() can tint faces */
     glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
     glEnable(GL_COLOR_MATERIAL);
+    /* Set default vertex color to white so material ambient/diffuse tracks it */
+    glColor3f(1.0f, 1.0f, 1.0f);
 
     /* Dark gray clear color (dark sky look) */
     glClearColor(0.08f, 0.08f, 0.12f, 1.0f);
