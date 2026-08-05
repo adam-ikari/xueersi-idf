@@ -151,16 +151,34 @@ static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
 	}
 
 	if (c->any_gen_enabled && c->lighting_enabled) {
-		/* Sphere-map reflection coords from the eye-space normal (v->normal,
-		 * computed in gl_vertex_transform from current_normal × model_view_inv).
-		 * Distant viewer E=(0,0,1): R = E - 2(N·E)N, then s=R.x/2+0.5,
-		 * t=R.y/2+0.5. Both axes respond to rotation. */
+		/* Standard OpenGL GL_SPHERE_MAP texture coordinate generation
+		 * (OpenGL 1.x spec, glTexGeni). Eye-space unit normal n (v->normal,
+		 * from current_normal × model_view_inv in gl_vertex_transform).
+		 * Distant (non-local) viewer u=(0,0,1). Reflection vector
+		 *   R = u − 2(n·u)n = (−2·nz·nx, −2·nz·ny, 1 − 2·nz²)
+		 * is unit-length for unit n. The sphere-map then projects R onto the
+		 * 2D texture via the sphere-silhouette denominator
+		 *   m = 2·√(R.x² + R.y² + (R.z+1)²)
+		 *   s = R.x/m + 0.5,   t = R.y/m + 0.5
+		 * The (R.z+1) term is the view-axis distance from the sphere's far
+		 * side; m maps the unit reflection sphere onto [0,1]². A head-on
+		 * face (R≈(0,0,−1), m→0) degenerates to the silhouette centre
+		 * (s=t=0.5); grazing faces spread toward the edge. This is the
+		 * standard formula — NOT the linear (R/2+0.5) approximation. */
 		V3 n = v->normal;
 		gl_V3_Norm_Fast(&n);          /* defensive; GL_NORMALIZE may be off */
 		GLfloat rx = -2.0f * n.Z * n.X;
 		GLfloat ry = -2.0f * n.Z * n.Y;
-		GLfloat sf = rx * 0.5f + 0.5f;
-		GLfloat tf = ry * 0.5f + 0.5f;
+		GLfloat rz = 1.0f - 2.0f * n.Z * n.Z;
+		GLfloat m = 2.0f * (GLfloat)sqrt((double)(rx * rx + ry * ry + (rz + 1.0f) * (rz + 1.0f)));
+		GLfloat sf, tf;
+		if (m > 1e-6f) {
+			sf = rx / m + 0.5f;
+			tf = ry / m + 0.5f;
+		} else {
+			sf = 0.5f;                /* head-on: silhouette centre */
+			tf = 0.5f;
+		}
 		v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
 		v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
 	}

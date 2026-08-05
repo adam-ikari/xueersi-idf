@@ -6,6 +6,51 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* ── sin/cos lookup table ──────────────────────────────────────────
+ * glRotatef (glopRotate → gl_M4_Rotate / glopRotate default branch) is a
+ * hot path: the WASM scene issues ~16 axis-aligned rotations per frame
+ * (cube tumble + skybox faces + cameras). ESP32's hardware FPU has no
+ * sin/cos instruction, so libm's software sin()/cos() dominate that cost.
+ * Replace them with a 512-entry LUT over [0, 2π) + nearest-neighbour
+ * lookup (2 KB, ~0.7° resolution — ample for rotation matrices whose
+ * input angle is itself a quantised s_angle). cos is sin shifted by π/2.
+ * Built lazily on first use (thread-safe enough: TinyGL runs single-
+ * threaded on core 1; a benign double-init is harmless). */
+#define TGL_TRIG_LUT_BITS  9
+#define TGL_TRIG_LUT_SIZE  (1 << TGL_TRIG_LUT_BITS)          /* 512 */
+#define TGL_TRIG_LUT_MASK  (TGL_TRIG_LUT_SIZE - 1)
+#define TGL_TWO_PI         6.28318530717958647692f
+
+static GLfloat tgl_sin_lut[TGL_TRIG_LUT_SIZE];
+static GLint  tgl_sin_lut_ready = 0;
+
+static void tgl_trig_lut_init(void) {
+	/* fill sin over [0, 2π) */
+	GLfloat inc = TGL_TWO_PI / (GLfloat)TGL_TRIG_LUT_SIZE;
+	GLint i;
+	for (i = 0; i < TGL_TRIG_LUT_SIZE; i++)
+		tgl_sin_lut[i] = (GLfloat)sin((double)(i * inc));
+	tgl_sin_lut_ready = 1;
+}
+
+/* Look up sin(t) and cos(t) simultaneously. t in radians, any range. */
+void tgl_sincos(GLfloat t, GLfloat* sp, GLfloat* cp) {
+	GLint is, ic;
+	if (!tgl_sin_lut_ready)
+		tgl_trig_lut_init();
+	/* map t ∈ ℝ to [0, 2π) index. fmodf keeps it bounded; the multiply
+	 * then scales to LUT entries. Nearest-neighbour (truncation) — the
+	 * 0.7° step is finer than s_angle's 2°/frame quantisation. */
+	GLfloat phase = t - TGL_TWO_PI * (GLfloat)(GLint)(t / TGL_TWO_PI); /* [0,2π) for t≥0; wraps negatives up too */
+	if (phase < 0.0f)
+		phase += TGL_TWO_PI;
+	is = (GLint)(phase * (TGL_TRIG_LUT_SIZE / TGL_TWO_PI)) & TGL_TRIG_LUT_MASK;
+	/* cos(t) = sin(t + π/2); π/2 = LUT_SIZE/4 entries */
+	ic = (is + (TGL_TRIG_LUT_SIZE >> 2)) & TGL_TRIG_LUT_MASK;
+	*sp = tgl_sin_lut[is];
+	*cp = tgl_sin_lut[ic];
+}
+
 /* ******* Gestion des matrices 4x4 ****** */
 
 void gl_M4_Id(M4* a) {
@@ -248,8 +293,7 @@ void gl_M4_Rotate(M4* a, GLfloat t, GLint u) {
 		v = 0;
 	if ((w = v + 1) > 2)
 		w = 0;
-	s = sin(t);
-	c = cos(t);
+	tgl_sincos(t, &s, &c);          /* LUT — replaces sin(t)/cos(t) */
 	gl_M4_Id(a);
 	a->m[v][v] = c;
 	a->m[v][w] = -s;
