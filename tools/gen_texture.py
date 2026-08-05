@@ -403,21 +403,28 @@ def gen_reflect(width: int, height: int) -> bytearray:
                 dy_n = dy * inv_len
                 rz_n = rz * inv_len
 
-                # Use R.y (vertical component) for sky/ground blending
-                ry = dy_n  # [-1, 1]  (-1 = ground, +1 = sky)
+                # Use R.y (vertical component) for sky/ground blending.
+                # dy is image-y (down-positive); gen_reflect colors the texel
+                # at (s,t) by the reflection whose R.y maps there, so dy's sign
+                # must match vertex.c's t = R.y/m + 0.5 (t>0.5 = sky). Both
+                # branches blend FROM the horizon color AT ry=0 TO the full
+                # sky/ground color AT |ry|=1 — previously the ground branch
+                # started at pure sand, so the disc centre (horizon) read as
+                # ground and head-on faces reflected sand instead of horizon.
+                ry = dy_n  # [-1,1]: +1=sky(t>0.5), -1=ground(t<0.5), 0=horizon
 
                 if ry > 0.0:
-                    # Sky side — blend deep blue → horizon white
+                    # Sky side — blend horizon blue → deep blue (ry: 0→1)
                     t = ry   # 0 (horizon) → 1 (zenith)
                     r = int(sky_hor_r + (sky_top_r - sky_hor_r) * t)
                     g = int(sky_hor_g + (sky_top_g - sky_hor_g) * t)
                     b = int(sky_hor_b + (sky_top_b - sky_hor_b) * t)
                 else:
-                    # Ground side — sand
+                    # Ground side — blend horizon blue → sand (ry: 0→-1)
                     t = -ry   # 0 (horizon) → 1 (nadir)
-                    r = int(ground_r - 30 * t)
-                    g = int(ground_g - 40 * t)
-                    b = int(ground_b - 35 * t)
+                    r = int(sky_hor_r + (ground_r - sky_hor_r) * t)
+                    g = int(sky_hor_g + (ground_g - sky_hor_g) * t)
+                    b = int(sky_hor_b + (ground_b - sky_hor_b) * t)
 
                 # Fade near the mirror edge (horizon blur)
                 edge = 1.0 - r2   # 0 at edge, 1 at center

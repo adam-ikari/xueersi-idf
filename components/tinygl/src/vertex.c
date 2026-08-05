@@ -152,31 +152,45 @@ static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
 
 	if (c->any_gen_enabled && c->lighting_enabled) {
 		/* Standard OpenGL GL_SPHERE_MAP texture coordinate generation
-		 * (OpenGL 1.x spec, glTexGeni). Eye-space unit normal n (v->normal,
-		 * from current_normal × model_view_inv in gl_vertex_transform).
-		 * Distant (non-local) viewer u=(0,0,1). Reflection vector
-		 *   R = u − 2(n·u)n = (−2·nz·nx, −2·nz·ny, 1 − 2·nz²)
-		 * is unit-length for unit n. The sphere-map then projects R onto the
-		 * 2D texture via the sphere-silhouette denominator
+		 * (OpenGL 1.x spec §2.10.4, glTexGeni). All quantities in eye
+		 * coordinates (eye at origin, looking down −Z).
+		 *   u = normalize(p_eye)   — unit vector from eye origin TO the
+		 *                             vertex (NOT a fixed (0,0,1); the
+		 *                             spec uses the real vertex position,
+		 *                             otherwise top faces reflect ground).
+		 *   n = eye-space unit normal (v->normal, from current_normal ×
+		 *       model_view_inv in gl_vertex_transform).
+		 *   R = u − 2(n·u)n
 		 *   m = 2·√(R.x² + R.y² + (R.z+1)²)
 		 *   s = R.x/m + 0.5,   t = R.y/m + 0.5
-		 * The (R.z+1) term is the view-axis distance from the sphere's far
-		 * side; m maps the unit reflection sphere onto [0,1]². A head-on
-		 * face (R≈(0,0,−1), m→0) degenerates to the silhouette centre
-		 * (s=t=0.5); grazing faces spread toward the edge. This is the
-		 * standard formula — NOT the linear (R/2+0.5) approximation. */
+		 * The (R.z+1) term maps the unit reflection sphere onto [0,1]²:
+		 * a head-on face (m→0) degenerates to the silhouette centre
+		 * (s=t=0.5); grazing faces spread toward the edge. */
 		V3 n = v->normal;
 		gl_V3_Norm_Fast(&n);          /* defensive; GL_NORMALIZE may be off */
-		GLfloat rx = -2.0f * n.Z * n.X;
-		GLfloat ry = -2.0f * n.Z * n.Y;
-		GLfloat rz = 1.0f - 2.0f * n.Z * n.Z;
-		GLfloat m = 2.0f * (GLfloat)sqrt((double)(rx * rx + ry * ry + (rz + 1.0f) * (rz + 1.0f)));
+		GLfloat plen = (GLfloat)sqrt((double)(v->ec.X * v->ec.X
+		                                      + v->ec.Y * v->ec.Y
+		                                      + v->ec.Z * v->ec.Z));
 		GLfloat sf, tf;
-		if (m > 1e-6f) {
-			sf = rx / m + 0.5f;
-			tf = ry / m + 0.5f;
+		if (plen > 1e-6f) {
+			GLfloat ux = v->ec.X / plen;
+			GLfloat uy = v->ec.Y / plen;
+			GLfloat uz = v->ec.Z / plen;
+			GLfloat d  = n.X * ux + n.Y * uy + n.Z * uz;
+			GLfloat rx = ux - 2.0f * d * n.X;
+			GLfloat ry = uy - 2.0f * d * n.Y;
+			GLfloat rz = uz - 2.0f * d * n.Z;
+			GLfloat m  = 2.0f * (GLfloat)sqrt((double)(rx * rx + ry * ry
+			                                        + (rz + 1.0f) * (rz + 1.0f)));
+			if (m > 1e-6f) {
+				sf = rx / m + 0.5f;
+				tf = ry / m + 0.5f;
+			} else {
+				sf = 0.5f;            /* head-on: silhouette centre */
+				tf = 0.5f;
+			}
 		} else {
-			sf = 0.5f;                /* head-on: silhouette centre */
+			sf = 0.5f;                /* vertex at eye: undefined */
 			tf = 0.5f;
 		}
 		v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
