@@ -324,11 +324,17 @@ void gl_shade_vertex(GLVertex* v) {
 					vcoord.X = v->ec.X;
 					vcoord.Y = v->ec.Y;
 					vcoord.Z = v->ec.Z;
-					
+
 					gl_V3_Norm_Fast(&vcoord);
+					/* Half-vector H = L + V where V (vertex→eye) = -normalize(pe).
+					 * vcoord = normalize(pe) = eye→vertex = -V, so H = d - vcoord.
+					 * (Previously all three components used vcoord.X — copy-paste
+					 * bug that made the local-viewer specular path compute a
+					 * garbage half-vector, so highlights never appeared when
+					 * GL_LIGHT_MODEL_LOCAL_VIEWER was enabled.) */
 					s.X = d.X - vcoord.X;
-					s.Y = d.Y - vcoord.X;
-					s.Z = d.Z - vcoord.X;
+					s.Y = d.Y - vcoord.Y;
+					s.Z = d.Z - vcoord.Z;
 				} else {
 					
 					s.X = d.X; 

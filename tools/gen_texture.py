@@ -190,17 +190,6 @@ def gen_metal(width: int, height: int) -> bytearray:
     buf = bytearray(width * height * 3)
     cx, cy = width / 2.0, height / 2.0
 
-    # Light direction (above-left-front, normalized)
-    lx, ly, lz = -0.4, -0.5, 0.77
-    ll = math.sqrt(lx*lx + ly*ly + lz*lz)
-    lx /= ll; ly /= ll; lz /= ll
-
-    # Viewer at normal incidence. Half-vector H = normalize(V + L)
-    hx, hy, hz = lx, ly, lz + 1.0
-    hl = math.sqrt(hx*hx + hy*hy + hz*hz)
-    hx /= hl; hy /= hl; hz /= hl
-    shininess = 64.0
-
     # ── Procedural heightfield features ────────────────────
     # Fine grain noise (sand-cast metal)
     nw, nh = 64, 64
@@ -299,28 +288,27 @@ def gen_metal(width: int, height: int) -> bytearray:
             # Positive h_disp = raised = catches more light = brighter.
             # Negative h_disp = recessed = darker.
 
-            # ── Blinn-Phong specular on sphere ──
-            dx_s = (x - cx) / cx
-            dy_s = (y - cy) / cy
-            d2_s = dx_s*dx_s + dy_s*dy_s
-            if d2_s < 1.0:
-                nz = math.sqrt(1.0 - d2_s)
-                ndot_h = dx_s * hx + dy_s * hy + nz * hz
-                if ndot_h < 0.0: ndot_h = 0.0
-                spec = ndot_h ** shininess
-                fresnel = 0.6 + 0.4 * (1.0 - nz)
-            else:
-                spec = 0.0
-                fresnel = 1.0
-
-            # Height modulates specular: raised = brighter, recessed = darker
+            # Heightfield shading only — NO baked specular hotspot.
+            # Previously this block computed a Blinn-Phong sphere specular
+            # (spec = (N·H)^shininess) and added spec*180 to RGB, which baked a
+            # fixed bright spot at the texture centre. With fixed per-face UV
+            # that spot sat motionless at each face's centre regardless of cube
+            # rotation — the "fixed bright spot" that masked the real API
+            # specular. Specular is now driven entirely by TinyGL's Blinn-Phong
+            # path (light.c) via glMaterialfv(GL_SPECULAR) + glLightModeli
+            # (LOCAL_VIEWER), so it wanders as the cube turns. The base texture
+            # keeps only diffuse relief: height modulates a soft directional
+            # shade so bumps/scratches/pits read as 3D without a static hotspot.
             height_mod = 1.0 + h_disp / 255.0  # ~[0.7, 1.3]
             if height_mod < 0.5: height_mod = 0.5
             if height_mod > 1.5: height_mod = 1.5
+            # soft diffuse shade from the heightfield's implied normal tilt:
+            # raised catch more of the directional fill, recessed catch less.
+            shade = 0.75 + 0.25 * (h_disp / 128.0 + 1.0)  # ~[0.5, 1.0]
 
-            r = max(0, min(255, base + streak + int(spec * 180.0 * fresnel * height_mod)))
-            g = max(0, min(255, base + streak + int(spec * 180.0 * fresnel * height_mod)))
-            b = max(0, min(255, base + streak + int(spec * 200.0 * fresnel * height_mod) + 6))
+            r = max(0, min(255, int((base + streak) * height_mod * shade)))
+            g = max(0, min(255, int((base + streak) * height_mod * shade)))
+            b = max(0, min(255, int((base + streak) * height_mod * shade) + 6))
 
             i = (y * width + x) * 3
             buf[i] = r; buf[i+1] = g; buf[i+2] = b

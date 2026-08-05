@@ -162,7 +162,7 @@ struct material_t {
 };
 static const material_t s_materials[] = {
     // base        reflect      refl_w  spec                    shin   metal?
-    { TEX_METAL,   TEX_REFLECT, 0.5f,   {0.85f,0.85f,0.85f,1.0f}, 90.0f, true  },  // 金属
+    { TEX_METAL,   TEX_REFLECT, 0.5f,   {0.85f,0.85f,0.85f,1.0f}, 20.0f, true  },  // 金属
     { TEX_BRICK,   0,           0.0f,   {0.10f,0.10f,0.10f,1.0f},  8.0f, false },  // 砖块
     { TEX_SAND,    0,           0.0f,   {0.15f,0.15f,0.15f,1.0f}, 12.0f, false },  // 沙石
 };
@@ -312,17 +312,24 @@ extern "C" void game_init(void)
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
 
-    /* Directional light from front-above-right: brightens all visible faces
-     * with a warm-white tint. Normalised dir ≈ (0.64, 0.53, 0.55). */
-    glLightfv(GL_LIGHT0, GL_POSITION, 3.0f, 2.5f, 2.6f, 0.0f);
+    /* Directional light from overhead-front, close to the view axis so visible
+     * faces can reflect it. With GL_LIGHT_MODEL_LOCAL_VIEWER the half-vector
+     * uses the per-vertex view direction, so highlights land on the visible
+     * faces and wander as the cube rotates. Normalised dir ≈ (0, 0.89, 0.45). */
+    glLightfv(GL_LIGHT0, GL_POSITION, 0.0f, 1.0f, 0.5f, 0.0f);
     glLightfv(GL_LIGHT0, GL_DIFFUSE,  1.0f, 1.0f, 1.0f, 1.0f);
     glLightfv(GL_LIGHT0, GL_SPECULAR, 1.0f, 1.0f, 1.0f, 1.0f);
+    /* Local viewer: half-vector H = normalize(L + V) with V = vertex→eye (not a
+     * fixed (0,0,1)). Under the 25° camera tilt a distant viewer's H never
+     * aligns with visible-face normals (n·H ≈ 0.78 → pow(·,shininess) ≈ 0);
+     * the local viewer makes H track each vertex so highlights become visible. */
+    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, 1);
 
     /* Default material: bright diffuse, strong specular highlight */
     glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,   0.4f, 0.4f, 0.4f, 1.0f);
     glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,   0.2f, 0.2f, 0.2f, 1.0f);
     glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR,  0.7f, 0.7f, 0.7f, 1.0f);
-    glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 60.0f);
+    glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 20.0f);
 
     /* Enable per-vertex color tracking so cube() can tint faces */
     glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
