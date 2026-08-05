@@ -383,13 +383,16 @@ def gen_reflect(width: int, height: int) -> bytearray:
             # t≈0.32) landed where dy_n≈0 → horizon blue instead of sand, and
             # the whole reflection read as "only sky blue". Colouring by the
             # true R.y fixes this: ground t-values now map to real sand.
+            # OpenGL t=0 is bottom (ground), t=1 is top (sky). In image space
+            # y=0 is the top row, so t must flip: t=1 at y=0 (sky), t=0 at
+            # y=height (ground).
             s = (x + 0.5) / width
-            t = (y + 0.5) / height
+            t = 1.0 - (y + 0.5) / height
             u = 2.0 * s - 1.0
             v = 2.0 * t - 1.0
             r2 = u * u + v * v
 
-            if r2 < 1.0:
+            if r2 < 1.0001:
                 f = 2.0 * math.sqrt(1.0 - r2)
                 ry = v * f  # R.y in [-1,1]: +1=zenith(sky), -1=nadir(ground), 0=horizon
 
