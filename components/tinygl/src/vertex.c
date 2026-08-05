@@ -146,8 +146,23 @@ static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
 	v->zp.b = (GLint)(v->color.v[2] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 
 	if (c->texture_2d_enabled) {
-		v->zp.s = (GLint)(v->tex_coord.X * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN); 
-		v->zp.t = (GLint)(v->tex_coord.Y * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN); 
+		v->zp.s = (GLint)(v->tex_coord.X * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
+		v->zp.t = (GLint)(v->tex_coord.Y * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
+	}
+
+	if (c->any_gen_enabled && c->lighting_enabled) {
+		/* Sphere-map reflection coords from the eye-space normal (v->normal,
+		 * computed in gl_vertex_transform from current_normal × model_view_inv).
+		 * Distant viewer E=(0,0,1): R = E - 2(N·E)N, then s=R.x/2+0.5,
+		 * t=R.y/2+0.5. Both axes respond to rotation. */
+		V3 n = v->normal;
+		gl_V3_Norm_Fast(&n);          /* defensive; GL_NORMALIZE may be off */
+		GLfloat rx = -2.0f * n.Z * n.X;
+		GLfloat ry = -2.0f * n.Z * n.Y;
+		GLfloat sf = rx * 0.5f + 0.5f;
+		GLfloat tf = ry * 0.5f + 0.5f;
+		v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
+		v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
 	}
 }
 

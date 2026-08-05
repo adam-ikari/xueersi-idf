@@ -153,8 +153,6 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
         }
         case GLCMD_ACTIVE_TEXTURE: {
             GLenum u = (GLenum)read_u32(&p);
-            static int d = 0;
-            if (d++ < 10) ESP_LOGI("dbg", "REPLAY activeTex 0x%x", u);
             glActiveTexture(u);
             break;
         }
@@ -162,9 +160,6 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
             GLint target = (GLint)read_u32(&p);
             GLint pname  = (GLint)read_u32(&p);
             GLint param  = (GLint)read_u32(&p);
-            static int d = 0;
-            if (d++ < 10) ESP_LOGI("dbg", "REPLAY texEnvi t=0x%x p=0x%x v=0x%x (active unit %d)",
-                                    target, pname, param, gl_get_context()->active_texture_unit);
             glTexEnvi(target, pname, param);
             break;
         }
@@ -261,6 +256,18 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
         case GLCMD_CLEAR_COLOR:
             glClearColor(read_f32(&p), read_f32(&p), read_f32(&p), read_f32(&p));
             break;
+
+        /* ── Reflection / Specular (standard OpenGL APIs) ── */
+        case GLCMD_SET_ENABLE_SPECULAR:
+            glSetEnableSpecular((GLint)read_u32(&p));
+            break;
+        case GLCMD_TEX_GENI: {
+            GLint coord = (GLint)read_u32(&p);
+            GLint pname = (GLint)read_u32(&p);
+            GLint param = (GLint)read_u32(&p);
+            glTexGeni(coord, pname, param);
+            break;
+        }
 
         case GLCMD_NOP:
         default:

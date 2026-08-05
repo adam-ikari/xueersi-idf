@@ -160,6 +160,9 @@ typedef struct GLTextureUnit {
 	GLint env_mode;              /* GL_REPLACE / GL_ADD */
 	GLfloat env_color[4];        /* GL_TEXTURE_ENV_COLOR (ADD weight in [0]) */
 	GLfloat u_off, v_off;        /* per-unit UV offset (texcoord scroll) */
+	GLint gen_s_enabled;         /* GL_TEXTURE_GEN_S enable (per-unit) */
+	GLint gen_t_enabled;         /* GL_TEXTURE_GEN_T enable (per-unit) */
+	GLint gen_mode;              /* GL_SPHERE_MAP (only mode supported) */
 } GLTextureUnit;
 
 /* buffers */
@@ -237,6 +240,9 @@ typedef struct GLContext {
 	/* textures */
 
 	GLint texture_2d_enabled;
+
+	GLint any_gen_enabled;   /* cached: any unit has gen_s||gen_t on —
+	                          * lets vertex pipeline skip sphere-map compute */
 
 	/* current list */
 

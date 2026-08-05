@@ -66,6 +66,10 @@ static void host_glTexEnvfv(wasm_exec_env_t env, int32_t target, int32_t pname,
   glcmd_f32(v0); glcmd_f32(v1); glcmd_f32(v2); glcmd_f32(v3); }
 static void host_glTexOffset(wasm_exec_env_t env, int32_t unit, float u, float v)
 { GLW_EMPTY(env); glcmd_u8(GLCMD_TEX_OFFSET); glcmd_u32((uint32_t)unit); glcmd_f32(u); glcmd_f32(v); }
+static void host_glTexGeni(wasm_exec_env_t env, int32_t coord, int32_t pname, int32_t param)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_TEX_GENI); glcmd_u32((uint32_t)coord); glcmd_u32((uint32_t)pname); glcmd_u32((uint32_t)param); }
+static void host_glSetEnableSpecular(wasm_exec_env_t env, int32_t flag)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_SET_ENABLE_SPECULAR); glcmd_u32((uint32_t)flag); }
 static void host_glEnable(wasm_exec_env_t env, int32_t cap)
 { GLW_EMPTY(env); glcmd_u8(GLCMD_ENABLE); glcmd_u32((uint32_t)cap); }
 static void host_glDisable(wasm_exec_env_t env, int32_t cap)
@@ -175,6 +179,8 @@ static NativeSymbol gl_natives[] = {
     { "glTexEnvi",       (void *)host_glTexEnvi,       "(iii)",    NULL },
     { "glTexEnvfv",      (void *)host_glTexEnvfv,      "(iiffff)", NULL },
     { "glTexOffset",     (void *)host_glTexOffset,     "(iff)",    NULL },
+    { "glTexGeni",       (void *)host_glTexGeni,       "(iii)",    NULL },
+    { "glSetEnableSpecular", (void *)host_glSetEnableSpecular, "(i)", NULL },
     { "glEnable",        (void *)host_glEnable,        "(i)",      NULL },
     { "glDisable",       (void *)host_glDisable,       "(i)",      NULL },
     { "glDepthMask",     (void *)host_glDepthMask,     "(i)",      NULL },

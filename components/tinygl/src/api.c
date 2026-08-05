@@ -577,6 +577,21 @@ void glTexOffset(GLenum unit, GLfloat u, GLfloat v) {
 	c->tex_unit[idx].v_off = v;
 }
 
+/* Sphere-map texcoord generation mode (standard OpenGL reflection API).
+ * Only GL_SPHERE_MAP is supported. The mode is per-unit; sphere-map always
+ * applies to both S and T together, so coord (GL_S/GL_T) is accepted but the
+ * mode is stored once per unit. Actual reflection coords are computed in
+ * vertex.c from the eye-space normal when gen is enabled. */
+void glTexGeni(GLint coord, GLint pname, GLint param) {
+	GLContext *c = gl_get_context();
+	int unit = c->active_texture_unit;
+	if (pname == GL_TEXTURE_GEN_MODE) {
+		if (param != GL_SPHERE_MAP) return; /* only sphere-map supported */
+		c->tex_unit[unit].gen_mode = param;
+	}
+	(void)coord; /* GL_S/GL_T accepted; sphere-map mode is per-unit */
+}
+
 void glTexParameteri(GLint target, GLint pname, GLint param) {
 
 #include "error_check_no_context.h"

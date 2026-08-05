@@ -293,6 +293,8 @@ typedef struct {
   GLint r,g,b;     /* color indexes */
   
   GLfloat sz,tz;   /* temporary coordinates for mapping */
+  GLint s2,t2;     /* secondary texcoord (sphere-map reflection) */
+  GLfloat sz2,tz2; /* perspective-divided secondary texcoord */
 } ZBufferPoint;
 
 /* zbuffer.c */

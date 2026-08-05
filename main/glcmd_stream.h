@@ -71,6 +71,10 @@ enum {
     /* ─ New: Clear ─ */
     GLCMD_CLEAR_COLOR,      // f32 r, g, b, a
 
+    /* ─ New: Reflection / Specular (standard OpenGL APIs) ─ */
+    GLCMD_SET_ENABLE_SPECULAR, // u32 flag  — enable TinyGL Blinn-Phong path
+    GLCMD_TEX_GENI,           // u32 coord, u32 pname, u32 param (sphere-map)
+
     GLCMD_COUNT
 };
 

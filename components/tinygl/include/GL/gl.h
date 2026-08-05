@@ -912,6 +912,7 @@ void glTexEnvi(GLint target,GLint pname,GLint param);
 void glTexEnvfv(GLenum target,GLenum pname,const GLfloat *params);
 void glActiveTexture(GLenum texture);
 void glTexOffset(GLenum unit,GLfloat u,GLfloat v);
+void glTexGeni(GLint coord,GLint pname,GLint param);
 
 void glTexParameteri(GLint target,GLint pname,GLint param);
 
