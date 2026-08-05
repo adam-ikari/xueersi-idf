@@ -133,9 +133,11 @@ def gen_sky(width: int, height: int) -> bytearray:
     ]
     for y in range(height):
         t = y / height
-        r = 70 + 60 * t
-        g = 120 + 60 * t
-        b = 190 + 40 * t
+        # Match horizon texture top edge (v=1): (130, 180, 230) at t=0,
+        # zenith deep blue (70, 120, 190) at t=1.
+        r = 130 - 60 * t
+        g = 180 - 60 * t
+        b = 230 - 40 * t
         for x in range(width):
             u = x / width
             cloud = 0.0
@@ -224,7 +226,7 @@ def gen_metal(width: int, height: int) -> bytearray:
         ))
 
     for y in range(height):
-        base = 130 + (y * 30 // height)  # polished-steel vertical gradient (bright)
+        base = 80 + (y * 20 // height)  # darker polished-steel base (mirror-like)
         for x in range(width):
             streak = ((x * 31 + y * 7) & 15) - 8
 
@@ -302,7 +304,7 @@ def gen_metal(width: int, height: int) -> bytearray:
             if height_mod > 1.5: height_mod = 1.5
             # soft diffuse shade from the heightfield's implied normal tilt:
             # raised catch more of the directional fill, recessed catch less.
-            shade = 0.75 + 0.25 * (h_disp / 128.0 + 1.0)  # ~[0.5, 1.0]
+            shade = 0.65 + 0.35 * (h_disp / 128.0 + 1.0)  # ~[0.3, 1.0], stronger contrast
 
             r = max(0, min(255, int((base + streak) * height_mod * shade)))
             g = max(0, min(255, int((base + streak) * height_mod * shade)))
@@ -365,10 +367,10 @@ def gen_reflect(width: int, height: int) -> bytearray:
     import math
     buf = bytearray(width * height * 3)
 
-    # Sky colors
-    sky_top_r, sky_top_g, sky_top_b = 60, 100, 180     # deep blue
-    sky_hor_r, sky_hor_g, sky_hor_b = 150, 190, 230    # horizon blue-white
-    ground_r, ground_g, ground_b = 210, 170, 110        # desert sand
+    # Sky colors — high contrast for mirror-like reflection
+    sky_top_r, sky_top_g, sky_top_b = 80, 140, 220     # bright deep blue
+    sky_hor_r, sky_hor_g, sky_hor_b = 180, 210, 240    # bright horizon blue-white
+    ground_r, ground_g, ground_b = 160, 120, 60        # deep desert sand
 
     for y in range(height):
         for x in range(width):
@@ -440,8 +442,8 @@ def gen_horizon(width: int, height: int) -> bytearray:
         for x in range(width):
             u = x / width
             if v < horizon - band:
-                n = ((x * 13 + y * 29) & 15) - 8
-                r, g, b = 214 + n, 182 + n, 132 + n
+                # Sand — smooth, no noise (was: n = ((x*13+y*29)&15)-8)
+                r, g, b = 214, 182, 132
             else:
                 t = (v - horizon) / (1.0 - horizon)
                 if t < 0.0:
@@ -463,10 +465,9 @@ def gen_horizon(width: int, height: int) -> bytearray:
                 sb += (255 - sb) * cloud
                 if v < horizon + band:
                     f = (v - (horizon - band)) / (2 * band)
-                    n = ((x * 13 + y * 29) & 15) - 8
-                    r = (214 + n) * (1 - f) + sr * f
-                    g = (182 + n) * (1 - f) + sg * f
-                    b = (132 + n) * (1 - f) + sb * f
+                    r = 214 * (1 - f) + sr * f
+                    g = 182 * (1 - f) + sg * f
+                    b = 132 * (1 - f) + sb * f
                 else:
                     r, g, b = sr, sg, sb
             i = (y * width + x) * 3

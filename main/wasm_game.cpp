@@ -163,7 +163,7 @@ struct material_t {
 static const material_t s_materials[] = {
     // base        reflect      refl_w  spec                    shin   metal?
     // base        reflect      refl_w  spec                    shin   metal?
-    { TEX_METAL,   TEX_REFLECT, 0.7f,   {0.85f,0.85f,0.85f,1.0f}, 20.0f, true  },  // 金属
+    { TEX_METAL,   TEX_REFLECT, 1.0f,   {0.90f,0.90f,0.90f,1.0f}, 40.0f, true  },  // 金属
     { TEX_BRICK,   0,           0.0f,   {0.10f,0.10f,0.10f,1.0f},  8.0f, false },  // 砖块
     { TEX_SAND,    0,           0.0f,   {0.15f,0.15f,0.15f,1.0f}, 12.0f, false },  // 沙石
 };
@@ -234,6 +234,7 @@ static void draw_skybox(void)
     glDepthMask(0);
     glDisable(GL_LIGHTING);
     glDisable(GL_CULL_FACE);
+    glColor3f(1.0f, 1.0f, 1.0f);  // ensure full-bright white (no material tint)
 
     /* +X */ skybox_face( s,-s,-s,  0, 0, 2*s,  0, 2*s, 0, TEX_HORIZON);
     /* -X */ skybox_face(-s,-s, s,  0, 0,-2*s,  0, 2*s, 0, TEX_HORIZON);
@@ -326,9 +327,9 @@ extern "C" void game_init(void)
      * the local viewer makes H track each vertex so highlights become visible. */
     glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, 1);
 
-    /* Default material: bright diffuse, strong specular highlight */
-    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,   0.15f, 0.15f, 0.15f, 1.0f);
-    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,   0.2f, 0.2f, 0.2f, 1.0f);
+    /* Default material: very low diffuse (mirror-like), strong specular */
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,   0.05f, 0.05f, 0.05f, 1.0f);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,   0.3f, 0.3f, 0.3f, 1.0f);
     glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR,  0.7f, 0.7f, 0.7f, 1.0f);
     glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 20.0f);
 
