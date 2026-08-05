@@ -224,7 +224,7 @@ def gen_metal(width: int, height: int) -> bytearray:
         ))
 
     for y in range(height):
-        base = 35 + (y * 35 // height)  # brushed steel vertical gradient
+        base = 130 + (y * 30 // height)  # polished-steel vertical gradient (bright)
         for x in range(width):
             streak = ((x * 31 + y * 7) & 15) - 8
 
@@ -265,12 +265,10 @@ def gen_metal(width: int, height: int) -> bytearray:
                         fade = (1.0 - (dist - 1.0) / 0.5) ** 2
                         h_disp -= 16.0 * fade
 
-            # Edge shadow
-            dx = (x - cx) / cx
-            dy = (y - cy) / cy
-            edge = dx*dx + dy*dy
-            if edge > 0.7:
-                h_disp -= 25.0 * ((edge - 0.7) / 0.3) ** 2
+            # Edge shadow removed — it produced a dark vignette that made
+            # the metal look like a circular disc rather than a seamless tile.
+            # The heightfield detail (grain, scratches, pits, rivets) is
+            # sufficient for bump relief; no need for an artificial edge darkening.
 
             # ── Perturb surface normal with height gradient ──
             # Sample height at neighbours for finite-difference normal
@@ -366,8 +364,6 @@ def gen_reflect(width: int, height: int) -> bytearray:
     reflect ADD + specular ADD) reads as polished metal."""
     import math
     buf = bytearray(width * height * 3)
-    cx, cy = width / 2.0, height / 2.0
-    max_r = min(cx, cy)
 
     # Sky colors
     sky_top_r, sky_top_g, sky_top_b = 60, 100, 180     # deep blue
@@ -376,53 +372,41 @@ def gen_reflect(width: int, height: int) -> bytearray:
 
     for y in range(height):
         for x in range(width):
-            dx = (x - cx) / max_r
-            dy = (y - cy) / max_r
+            # Standard sphere-map INVERSE: given texel (s,t), recover the unit
+            # reflection vector R, then colour by R.y (sky vs ground).
+            # Forward (vertex.c): m=2·sqrt(Rx²+Ry²+(Rz+1)²), s=Rx/m+0.5,
+            #   t=Ry/m+0.5. Inverting (u=2s-1, v=2t-1, r2=u²+v²):
+            #   R.z = 1-2·r2,  R.x = u·2·sqrt(1-r2),  R.y = v·2·sqrt(1-r2).
+            # The previous implementation coloured by dy_n (the texel's own
+            # normalized (dx,dy,rz) y), which is NOT R.y — the forward map is
+            # nonlinear and R.z-dependent, so mid-t ground reflections (e.g.
+            # t≈0.32) landed where dy_n≈0 → horizon blue instead of sand, and
+            # the whole reflection read as "only sky blue". Colouring by the
+            # true R.y fixes this: ground t-values now map to real sand.
+            s = (x + 0.5) / width
+            t = (y + 0.5) / height
+            u = 2.0 * s - 1.0
+            v = 2.0 * t - 1.0
+            r2 = u * u + v * v
 
-            # Sphere-map: reflected view vector R at pixel (dx, dy)
-            # For a sphere-map: r² = dx² + dy², and R.z = 1 - r²
-            r2 = dx*dx + dy*dy
             if r2 < 1.0:
-                # R = (dx, dy, 1 - r2) normalized
-                rz = 1.0 - r2  # actually this IS rz unnormalized since nz=1
-                # Compute normalized R from the sphere-map projection
-                inv_len = 1.0 / math.sqrt(r2 + rz*rz)
-                dx_n = dx * inv_len
-                dy_n = dy * inv_len
-                rz_n = rz * inv_len
-
-                # Use R.y (vertical component) for sky/ground blending.
-                # dy is image-y (down-positive); gen_reflect colors the texel
-                # at (s,t) by the reflection whose R.y maps there, so dy's sign
-                # must match vertex.c's t = R.y/m + 0.5 (t>0.5 = sky). Both
-                # branches blend FROM the horizon color AT ry=0 TO the full
-                # sky/ground color AT |ry|=1 — previously the ground branch
-                # started at pure sand, so the disc centre (horizon) read as
-                # ground and head-on faces reflected sand instead of horizon.
-                ry = dy_n  # [-1,1]: +1=sky(t>0.5), -1=ground(t<0.5), 0=horizon
+                f = 2.0 * math.sqrt(1.0 - r2)
+                ry = v * f  # R.y in [-1,1]: +1=zenith(sky), -1=nadir(ground), 0=horizon
 
                 if ry > 0.0:
                     # Sky side — blend horizon blue → deep blue (ry: 0→1)
-                    t = ry   # 0 (horizon) → 1 (zenith)
-                    r = int(sky_hor_r + (sky_top_r - sky_hor_r) * t)
-                    g = int(sky_hor_g + (sky_top_g - sky_hor_g) * t)
-                    b = int(sky_hor_b + (sky_top_b - sky_hor_b) * t)
+                    blend = ry
+                    r = int(sky_hor_r + (sky_top_r - sky_hor_r) * blend)
+                    g = int(sky_hor_g + (sky_top_g - sky_hor_g) * blend)
+                    b = int(sky_hor_b + (sky_top_b - sky_hor_b) * blend)
                 else:
                     # Ground side — blend horizon blue → sand (ry: 0→-1)
-                    t = -ry   # 0 (horizon) → 1 (nadir)
-                    r = int(sky_hor_r + (ground_r - sky_hor_r) * t)
-                    g = int(sky_hor_g + (ground_g - sky_hor_g) * t)
-                    b = int(sky_hor_b + (ground_b - sky_hor_b) * t)
-
-                # Fade near the mirror edge (horizon blur)
-                edge = 1.0 - r2   # 0 at edge, 1 at center
-                if edge < 0.15:
-                    f = edge / 0.15
-                    r = int(f * r + (1 - f) * sky_hor_r)
-                    g = int(f * g + (1 - f) * sky_hor_g)
-                    b = int(f * b + (1 - f) * sky_hor_b)
+                    blend = -ry
+                    r = int(sky_hor_r + (ground_r - sky_hor_r) * blend)
+                    g = int(sky_hor_g + (ground_g - sky_hor_g) * blend)
+                    b = int(sky_hor_b + (ground_b - sky_hor_b) * blend)
             else:
-                # Outside the sphere — horizon blue
+                # Outside the unit disc — never sampled, fill horizon blue.
                 r, g, b = sky_hor_r, sky_hor_g, sky_hor_b
 
             i = (y * width + x) * 3
@@ -503,6 +487,48 @@ KINDS = {
 }
 
 
+def write_bmp(buf: bytes, width: int, height: int, path: str) -> None:
+    """Write a 24-bit BMP (bottom-up rows, BGR) so generated textures can be
+    visually inspected. The .h header is what the firmware uses; the .bmp is a
+    human-facing preview kept next to it in the build directory."""
+    row_bytes = width * 3
+    pad = (4 - row_bytes % 4) % 4
+    padded_row = row_bytes + pad
+    image_size = padded_row * height
+    file_size = 14 + 40 + image_size
+    with open(path, "wb") as f:
+        # BITMAPFILEHEADER (14 bytes)
+        f.write(b"BM")
+        f.write(file_size.to_bytes(4, "little"))
+        f.write((0).to_bytes(2, "little"))
+        f.write((0).to_bytes(2, "little"))
+        f.write((54).to_bytes(4, "little"))
+        # BITMAPINFOHEADER (40 bytes)
+        f.write((40).to_bytes(4, "little"))
+        f.write(width.to_bytes(4, "little"))
+        f.write(height.to_bytes(4, "little"))
+        f.write((1).to_bytes(2, "little"))   # planes
+        f.write((24).to_bytes(2, "little"))  # bpp
+        f.write((0).to_bytes(4, "little"))   # compression
+        f.write(image_size.to_bytes(4, "little"))
+        f.write((2835).to_bytes(4, "little"))  # 72 DPI x
+        f.write((2835).to_bytes(4, "little"))  # 72 DPI y
+        f.write((0).to_bytes(4, "little"))
+        f.write((0).to_bytes(4, "little"))
+        # Pixel data: BMP rows are bottom-up, BGR. buf is top-down RGB.
+        pad_bytes = b"\x00" * pad
+        for y in range(height - 1, -1, -1):
+            row = bytearray()
+            base = y * width * 3
+            for x in range(width):
+                i = base + x * 3
+                row.append(buf[i + 2])  # B
+                row.append(buf[i + 1])  # G
+                row.append(buf[i + 0])  # R
+            f.write(row)
+            f.write(pad_bytes)
+
+
 def emit_header(buf: bytes, name: str, width: int, height: int, path: str) -> None:
     with open(path, "w") as f:
         f.write("/* auto-generated by tools/gen_texture.py — do not edit */\n")
@@ -537,8 +563,12 @@ def main(argv: list[str]) -> int:
     buf = KINDS[kind](width, height)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     emit_header(buf, name, width, height, out_path)
+    # Also write a .bmp preview (same stem) so generated textures can be
+    # visually inspected without flashing the device.
+    bmp_path = os.path.splitext(out_path)[0] + ".bmp"
+    write_bmp(buf, width, height, bmp_path)
     print(f"gen_texture: wrote {out_path} ({len(buf)} bytes, "
-          f"{width}x{height}, kind={kind}, name={name})")
+          f"{width}x{height}, kind={kind}, name={name}) + {bmp_path}")
     return 0
 
 
