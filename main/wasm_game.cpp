@@ -132,14 +132,27 @@ enum {
 };
 
 // ── Material presets ────────────────────────────────────
-// Each material is a complete triple: base texture + overlay1 + overlay2 with
-// appropriate weights for the material's look.
-struct material_t { int base; int ov1; int ov2; float w1; float w2; bool metal; };
+// Each material pairs a base texture with an optional reflection overlay
+// (TEX_REFLECT, scrolled via glTexOffset for an approximate walking
+// reflection) and an API-driven specular highlight. Bumpiness is baked
+// into the base texture (TEX_METAL) as color shading — no normal/height
+// maps — so the base must use FIXED per-face UV or the bumps walk.
+// Specular quality is driven by glMaterialfv(GL_SPECULAR) +
+// glMaterialf(GL_SHININESS) through TinyGL's Blinn-Phong path (light.c),
+// NOT by a TEX_SPECULAR overlay texture.
+struct material_t {
+    int base;           /* unit0 base texture (fixed UV) */
+    int reflect;        /* unit1 reflection overlay (ADD + glTexOffset scroll), 0=off */
+    float refl_w;       /* unit1 ADD weight */
+    float spec[4];      /* GL_SPECULAR rgba */
+    float shininess;    /* GL_SHININESS */
+    bool metal;         /* enable reflection scroll */
+};
 static const material_t s_materials[] = {
-    // base        overlay1     overlay2     w1     w2   metal?
-    { TEX_METAL,   TEX_REFLECT, TEX_SPECULAR, 1.0f,  1.2f, true  },  // 金属
-    { TEX_BRICK,   0,           0,            0.0f,  0.0f, false },  // 砖块
-    { TEX_SAND,    0,           0,            0.0f,  0.0f, false },  // 沙石
+    // base        reflect      refl_w  spec                    shin   metal?
+    { TEX_METAL,   TEX_REFLECT, 0.5f,   {0.85f,0.85f,0.85f,1.0f}, 90.0f, true  },  // 金属
+    { TEX_BRICK,   0,           0.0f,   {0.10f,0.10f,0.10f,1.0f},  8.0f, false },  // 砖块
+    { TEX_SAND,    0,           0.0f,   {0.15f,0.15f,0.15f,1.0f}, 12.0f, false },  // 沙石
 };
 static const int MATERIAL_COUNT = sizeof(s_materials) / sizeof(s_materials[0]);
 static int s_material_idx = 0;  /* current material index */
@@ -148,11 +161,15 @@ static int s_material_idx = 0;  /* current material index */
 static float s_angle = 0.0f;       /* cube rotation (fast) */
 static float s_sky_angle = 0.0f;   /* skybox rotation (slower) */
 static int s_label_show = 0;       /* frames remaining for texture name label */
+static float s_refl_scroll_u = 0.0f; /* reflection overlay scroll (metal) */
+static float s_refl_scroll_v = 0.0f;
 
 // ── Draw a cube of half-size hs, centred at origin ─────
-// eye_x/y/z: viewer position in the cube's LOCAL frame (only used for metal
-// reflection mapping; other textures use a fixed distant viewer (0,0,5)).
-static void cube(float hs, float eye_x, float eye_y, float eye_z)
+// Fixed per-face UV (0..1) so the base texture's baked bumps stay put.
+// Per-vertex normals drive TinyGL's Blinn-Phong specular via glMaterialfv.
+// Reflection (for metal) is an approximate walking overlay applied by
+// draw_cube() through glTexOffset on unit1 — not computed here.
+static void cube(float hs)
 {
     struct Face { float n[3]; float v[4][3]; };
     static const Face F[6] = {
@@ -163,27 +180,14 @@ static void cube(float hs, float eye_x, float eye_y, float eye_z)
         { { 1, 0, 0}, { { hs,-hs, hs}, { hs,-hs,-hs}, { hs, hs,-hs}, { hs, hs, hs} } },
         { {-1, 0, 0}, { {-hs,-hs,-hs}, {-hs,-hs, hs}, {-hs, hs, hs}, {-hs, hs,-hs} } },
     };
+    /* fixed per-corner UV (matches tinygl_test.c draw_metal_cube) */
+    static const float UV[4][2] = { {0,0}, {1,0}, {1,1}, {0,1} };
     glBegin(GL_QUADS);
     for (int f = 0; f < 6; f++) {
         for (int k = 0; k < 4; k++) {
-            float vx = F[f].v[k][0], vy = F[f].v[k][1], vz = F[f].v[k][2];
-            // view ray: from surface point toward the viewer (in local frame)
-            float ix = eye_x - vx, iy = eye_y - vy, iz = eye_z - vz;
-            float il = __builtin_sqrtf(ix*ix + iy*iy + iz*iz);
-            if (il > 0.001f) { ix /= il; iy /= il; iz /= il; }
-            // reflect across the face normal
-            float nd = F[f].n[0]*ix + F[f].n[1]*iy + F[f].n[2]*iz;
-            float rx = ix - 2*nd*F[f].n[0];
-            float ry = iy - 2*nd*F[f].n[1];
-            // sphere-map: s from Rx, t from Ry
-            // (ry>0 = pointing up = should reflect sky = top of texture = t small)
-            float s = (rx + 1) * 0.5f;
-            float t = (1 - ry) * 0.5f;
-            if (s < 0) s = 0; else if (s > 1) s = 1;
-            if (t < 0) t = 0; else if (t > 1) t = 1;
             glNormal3f(F[f].n[0], F[f].n[1], F[f].n[2]);
-            glTexCoord2f(s, t);
-            glVertex3f(vx, vy, vz);
+            glTexCoord2f(UV[k][0], UV[k][1]);
+            glVertex3f(F[f].v[k][0], F[f].v[k][1], F[f].v[k][2]);
         }
     }
     glEnd();
@@ -235,80 +239,46 @@ static void draw_skybox(void)
 // ── Draw the textured cube with configurable layers ─────
 static void draw_cube(float hs, const material_t *mat)
 {
-    /* Unit 0: base texture */
+    /* Per-material specular via OpenGL API (drives TinyGL Blinn-Phong). */
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR, mat->spec[0], mat->spec[1],
+                 mat->spec[2], mat->spec[3]);
+    glMaterialf(GL_FRONT_AND_BACK, GL_SHININESS, mat->shininess);
+
+    /* Unit 0: base texture (fixed UV — baked bumps stay put) */
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, mat->base);
     glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 
-    /* Unit 1: overlay 1 (ADD) */
-    if (mat->ov1 && mat->w1 > 0.01f) {
+    /* Unit 1: reflection overlay (ADD + glTexOffset scroll).
+     * The scroll is the approximate "walking reflection": TinyGL applies
+     * the per-unit u_off/v_off offset in its rasterizer (ztriangle.c), so
+     * the reflection moves across the surface without WASM computing any
+     * per-vertex reflection vector. TEX_METAL's fixed UV is unaffected
+     * (offset is per-unit, added only to unit1's sampling). */
+    if (mat->reflect && mat->refl_w > 0.01f) {
+        s_refl_scroll_u += 0.002f;
+        s_refl_scroll_v += 0.001f;
         glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, mat->ov1);
+        glBindTexture(GL_TEXTURE_2D, mat->reflect);
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, mat->w1, mat->w1, mat->w1, 1.0f);
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR,
+                   mat->refl_w, mat->refl_w, mat->refl_w, 1.0f);
+        glTexOffset(GL_TEXTURE1, s_refl_scroll_u, s_refl_scroll_v);
     } else {
         glActiveTexture(GL_TEXTURE1);
         glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
     }
 
-    /* Unit 2: overlay 2 (ADD) */
-    if (mat->ov2 && mat->w2 > 0.01f) {
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, mat->ov2);
-        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_ADD);
-        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, mat->w2, mat->w2, mat->w2, 1.0f);
-        /* Animated specular sweep */
-        if (mat->ov2 == TEX_SPECULAR) {
-            float su = s_angle * 0.3f;
-            float sv = s_angle * 0.15f;
-            glTexOffset(GL_TEXTURE2, su, sv);
-        }
-    } else {
-        glActiveTexture(GL_TEXTURE2);
-        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
-    }
+    /* Unit 2: unused (specular is now API-driven, no TEX_SPECULAR overlay). */
+    glActiveTexture(GL_TEXTURE2);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_REPLACE);
 
-    // Compute viewer position in the cube's LOCAL frame.
-    // Metal materials: full inverse modelview for environment reflection.
-    // Non-metal: fixed distant viewer (0,0,5) — no reflection needed.
-    {
-        float eye_x = 0.0f, eye_y = 0.0f, eye_z = 5.0f;
-
-        if (mat->metal) {
-            float a  = s_angle * 3.14159265f / 180.0f;
-            float ax = a * 0.6f;
-            float ay = a;
-            float px = 25.0f * 3.14159265f / 180.0f;
-
-            float ca = __builtin_cosf(ax), sa = __builtin_sinf(ax);
-            float cb = __builtin_cosf(ay), sb = __builtin_sinf(ay);
-            float cp = __builtin_cosf(px), sp = __builtin_sinf(px);
-
-            float vx = 0.0f, vy = 0.0f, vz = 3.5f;
-
-            // inv(R_x(25))
-            { float t = vy; vy = t*cp + vz*sp; vz = -t*sp + vz*cp; }
-            // inv(R_y(a)) — scene yaw
-            { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
-            // inv(R_y(a)) — cube Y
-            { float t = vx; vx = t*cb - vz*sb; vz = t*sb + vz*cb; }
-            // inv(R_x(0.6a))
-            { float t = vy; vy = t*ca + vz*sa; vz = -t*sa + vz*ca; }
-
-            float len = __builtin_sqrtf(vx*vx + vy*vy + vz*vz);
-            if (len > 0.001f) { vx /= len; vy /= len; vz /= len; }
-            eye_x = vx * 5.0f;
-            eye_y = vy * 5.0f;
-            eye_z = vz * 5.0f;
-        }
-
-        glActiveTexture(GL_TEXTURE0);
-        glPushMatrix();
-        glRotatef(s_angle, 0, 1, 0);
-        glRotatef(s_angle * 0.6f, 1, 0, 0);
-        cube(hs, eye_x, eye_y, eye_z);
-        glPopMatrix();
-    }
+    glActiveTexture(GL_TEXTURE0);
+    glPushMatrix();
+    glRotatef(s_angle, 0, 1, 0);
+    glRotatef(s_angle * 0.6f, 1, 0, 0);
+    cube(hs);
+    glPopMatrix();
 
     /* Reset units 1-2 to REPLACE so subsequent draws aren't multi-textured. */
     glActiveTexture(GL_TEXTURE1);
