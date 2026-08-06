@@ -157,59 +157,43 @@ static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
 	}
 
 	if (c->any_gen_enabled && c->lighting_enabled) {
-		/* Standard OpenGL GL_SPHERE_MAP texture coordinate generation
-		 * (OpenGL 1.x spec §2.10.4, glTexGeni). All quantities in eye
-		 * coordinates (eye at origin, looking down −Z).
-		 *   u = normalize(p_eye)   — unit vector from eye origin TO the
-		 *                             vertex (NOT a fixed (0,0,1); the
-		 *                             spec uses the real vertex position,
-		 *                             otherwise top faces reflect ground).
-		 *   n = eye-space unit normal (v->normal, from current_normal ×
-		 *       model_view_inv in gl_vertex_transform).
-		 *   R = u − 2(n·u)n
-		 *   m = 2·√(R.x² + R.y² + (R.z+1)²)
-		 *   s = R.x/m + 0.5,   t = R.y/m + 0.5
-		 * The (R.z+1) term maps the unit reflection sphere onto [0,1]²:
-		 * a head-on face (m→0) degenerates to the silhouette centre
-		 * (s=t=0.5); grazing faces spread toward the edge. */
+		/* Cheap "fake" environment reflection — an offset-scroll
+		 * approximation driven by the eye-space normal. The kernel owns
+		 * the offset computation (the API caller just enables
+		 * GL_TEXTURE_GEN_S/T + GL_SPHERE_MAP and is never told how the
+		 * coords are derived), so there is zero burden on the WASM side.
+		 *
+		 * This deliberately does NOT use the real sphere-projection math
+		 * (R = u − 2(n·u)n, m = 2√(R.x²+R.y²+(R.z+1)²), s=R.x/m+0.5) —
+		 * that per-vertex sqrt + reflection-vector work was overkill for
+		 * a 12-vertex cube and produced edge cases (out-of-disc faces,
+		 * static reflections under view/rotation cancellation). Instead
+		 * the reflection texture is scrolled by the normal's X/Y
+		 * components: a face whose normal points up reads sky (t→1),
+		 * down reads ground (t→0), and Y-axis rotation scrolls the
+		 * texture sideways (s). Head-on (n.X=n.Y=0) sits at the texture
+		 * centre (horizon), grazing faces spread to the edge — the same
+		 * boundary behaviour as sphere-map, at 2 mul-adds/vertex.
+		 *
+		 * Performance: when GL_NORMALIZE is on (it is, in game_init),
+		 * gl_vertex_transform has ALREADY unit-lengthened v->normal, so
+		 * we skip the defensive re-normalize here — that saves a sqrt +
+		 * divide per reflective vertex. Only re-normalize if the app
+		 * left GL_NORMALIZE off. */
 		V3 n = v->normal;
-		gl_V3_Norm_Fast(&n);          /* defensive; GL_NORMALIZE may be off */
-		GLfloat plen = (GLfloat)sqrt((double)(v->ec.X * v->ec.X
-		                                      + v->ec.Y * v->ec.Y
-		                                      + v->ec.Z * v->ec.Z));
-		GLfloat sf, tf;
-		if (plen > 1e-6f) {
-			GLfloat ux = v->ec.X / plen;
-			GLfloat uy = v->ec.Y / plen;
-			GLfloat uz = v->ec.Z / plen;
-			GLfloat d  = n.X * ux + n.Y * uy + n.Z * uz;
-			GLfloat rx = ux - 2.0f * d * n.X;
-			GLfloat ry = uy - 2.0f * d * n.Y;
-			GLfloat rz = uz - 2.0f * d * n.Z;
-			GLfloat m  = 2.0f * (GLfloat)sqrt((double)(rx * rx + ry * ry
-			                                        + (rz + 1.0f) * (rz + 1.0f)));
-			if (m > 1e-6f) {
-				sf = rx / m + 0.5f;
-				tf = ry / m + 0.5f;
-			} else {
-				sf = 0.5f;            /* head-on: silhouette centre */
-				tf = 0.5f;
-			}
-			v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
-			v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
-			if (s_reflect_dump_left > 0) {
-				s_reflect_dump_left--;
-				ESP_LOGI(TGL_REF_TAG,
-					"REFL n=(%.3f,%.3f,%.3f) pe=(%.2f,%.2f,%.2f) u=(%.3f,%.3f,%.3f) "
-					"ndotu=%.3f R=(%.3f,%.3f,%.3f) m=%.3f s2=%.3f t2=%.3f",
-					n.X, n.Y, n.Z, v->ec.X, v->ec.Y, v->ec.Z,
-					ux, uy, uz, d, rx, ry, rz, m, sf, tf);
-			}
-		} else {
-			sf = 0.5f;                /* vertex at eye: undefined */
-			tf = 0.5f;
-			v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
-			v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
+		if (!c->normalize_enabled)
+			gl_V3_Norm_Fast(&n);
+		GLfloat sf = 0.5f + 0.5f * n.X;
+		GLfloat tf = 0.5f + 0.5f * n.Y;
+		if (sf < 0.0f) sf = 0.0f; else if (sf > 1.0f) sf = 1.0f;
+		if (tf < 0.0f) tf = 0.0f; else if (tf > 1.0f) tf = 1.0f;
+		v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
+		v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
+		if (s_reflect_dump_left > 0) {
+			s_reflect_dump_left--;
+			ESP_LOGI(TGL_REF_TAG,
+				"REFL n=(%.3f,%.3f,%.3f) s2=%.3f t2=%.3f",
+				n.X, n.Y, n.Z, sf, tf);
 		}
 	}
 }
