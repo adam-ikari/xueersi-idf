@@ -181,135 +181,83 @@ def gen_sand(width: int, height: int) -> bytearray:
 
 
 def gen_metal(width: int, height: int) -> bytearray:
-    """Metallic base texture with baked surface detail (bumps/scratches/pits).
+    """Brushed-metal (拉丝) base texture: regular directional streaks, low
+    roughness.
 
-    Combines Blinn-Phong specular lighting with a procedural heightfield
-    so the bump relief is baked directly into the base texture — no extra
-    texture unit consumed."""
+    Replaces the earlier sand-cast heightfield (grain/pits/rivets/random
+    scratches) which read as rough and dark. Brushed metal is characterised
+    by fine, near-parallel surface striations laid down by an abrasive pad —
+    uniform direction, gentle anisotropic shading, and a SMOOTH bright base.
+
+    Why bright + low-contrast: TinyGL's RGB_MIX_FUNC is modulate
+    (vertexColor × texel / 256, zbuffer.h:123-131). Specular adds to the
+    vertex colour (light.c:391) BEFORE the texture modulates it, so a dark
+    texel caps the highlight. The reflection overlay (unit1 ADD) is a
+    separate true-ADD path and is NOT suppressed, but its perceived strength
+    scales with how bright the whole surface reads. A bright, low-roughness
+    base therefore lets both the Blinn-Phong specular and the sphere-map
+    reflection read as polished metal instead of being crushed by a dark
+    pitted texel. This is the "降低金属的粗糙度" lever — shininess alone
+    (already 20 in wasm_game.cpp) was not enough; the texture itself was the
+    roughness source.
+    """
     import math, random as _random
     rng = _random.Random(42)  # deterministic
 
     buf = bytearray(width * height * 3)
-    cx, cy = width / 2.0, height / 2.0
 
-    # ── Procedural heightfield features ────────────────────
-    # Fine grain noise (sand-cast metal)
-    nw, nh = 64, 64
-    noise = [rng.randint(0, 255) for _ in range(nw * nh)]
+    # Brush direction: horizontal streaks (拉丝 along +X). This is the
+    # canonical look and, being axis-aligned, tiles seamlessly in X.
+    # Streaks are built from a handful of long, faint, low-frequency
+    # sinusoids along X plus a thin high-frequency component — regular, not
+    # noisy. A small per-row phase drift gives the subtle waviness real
+    # brushed metal shows without breaking the dominant direction.
 
-    # Directional scratches (brushed metal)
-    scratches = []
-    for _ in range(8):
-        scratches.append((
-            rng.uniform(0, width), rng.uniform(0, height),
-            rng.uniform(-0.6, 0.6),   # angle
-            rng.uniform(60, 180),      # length
-            rng.uniform(1.5, 3.5),     # width
-        ))
+    # Base polished-steel colour — bright so modulate doesn't crush the
+    # highlight. ~190 on an 0..255 scale (≈0.75 reflectance).
+    base = 190
 
-    # Pits (casting defects)
-    pits = []
-    for _ in range(25):
-        pits.append((
-            rng.uniform(0, width), rng.uniform(0, height),
-            rng.uniform(3.0, 10.0),   # radius
-            rng.uniform(0.35, 0.75),   # depth
-        ))
+    # Streak generators: (frequency in cycles/texel-x, amplitude, phase).
+    # Low amp keeps the surface low-roughness (streaks vary ±~22 around base,
+    # i.e. 168..212) so no dark valleys suppress specular/reflection.
+    streaks = [
+        (0.021, 11.0, 0.0),
+        (0.037, 7.0, 1.3),
+        (0.083, 4.5, 2.1),
+        (0.17,  2.5, 0.6),
+    ]
 
-    # Rivets/studs
-    rivets = []
-    for _ in range(6):
-        rivets.append((
-            rng.uniform(0.12 * width, 0.88 * width),
-            rng.uniform(0.12 * height, 0.88 * height),
-            rng.uniform(5.0, 11.0),    # radius
-        ))
+    # A faint cross-direction (vertical) large-scale modulation so the metal
+    # isn't a perfectly uniform slab — reads as a slightly varying sheet.
+    # Very low amplitude; this is NOT a second brush direction.
+    cross_freq_y = 0.012
+    cross_amp_y  = 6.0
 
     for y in range(height):
-        base = 80 + (y * 20 // height)  # darker polished-steel base (mirror-like)
+        # Per-row phase drift (slow) + deterministic jitter (tiny) so streaks
+        # aren't a perfectly periodic comb — real brushed lines wander a hair.
+        row_phase = 0.04 * y
+        # Subtle vertical bright/dark banding from the cross modulation.
+        vy = math.sin(2.0 * math.pi * cross_freq_y * y + 0.5)
         for x in range(width):
-            streak = ((x * 31 + y * 7) & 15) - 8
+            s = 0.0
+            for freq, amp, ph in streaks:
+                s += amp * math.sin(2.0 * math.pi * freq * x + ph + row_phase)
+            v = base + s + cross_amp_y * vy
 
-            # ── Height displacement (fakes surface micro-geometry) ──
-            h_disp = 0.0
+            # A whisper of fine high-frequency grit along the brush lines so
+            # the streaks have texture up close but stay low-contrast (±4).
+            v += (rng.randint(0, 8) - 4)
 
-            # Grain noise
-            nx = int(x * nw / width)
-            ny = int(y * nh / height)
-            h_disp += (noise[(ny % nh) * nw + (nx % nw)] - 128) * 0.35
+            # Mild cool tint (steel): B a touch higher than R/G. Keep small
+            # so the metal reads as neutral polished steel, not blue.
+            r = v
+            g = v
+            b = v + 5
 
-            # Scratches
-            for sx, sy, sa, sl, sw in scratches:
-                d_local_x = x - sx
-                d_local_y = y - sy
-                along = d_local_x * math.cos(sa) + d_local_y * math.sin(sa)
-                across = abs(-d_local_x * math.sin(sa) + d_local_y * math.cos(sa))
-                if 0 <= along <= sl and across < sw:
-                    f = (1.0 - across / sw) ** 2
-                    ef = 1.0 - abs(along - sl/2) / (sl/2)
-                    h_disp -= 60.0 * f * ef
-
-            # Pits
-            for px, py, pr, pd in pits:
-                d2 = (x - px)**2 + (y - py)**2
-                if d2 < pr*pr:
-                    dist = math.sqrt(d2) / pr
-                    h_disp -= 70.0 * pd * (1.0 - dist) ** 2
-
-            # Rivets
-            for rx, ry, rr in rivets:
-                d2 = (x - rx)**2 + (y - ry)**2
-                if d2 < rr*rr*1.5*1.5:
-                    dist = math.sqrt(d2) / rr
-                    if dist < 1.0:
-                        h_disp += 55.0 * (1.0 - dist*dist)
-                    elif dist < 1.5:
-                        fade = (1.0 - (dist - 1.0) / 0.5) ** 2
-                        h_disp -= 16.0 * fade
-
-            # Edge shadow removed — it produced a dark vignette that made
-            # the metal look like a circular disc rather than a seamless tile.
-            # The heightfield detail (grain, scratches, pits, rivets) is
-            # sufficient for bump relief; no need for an artificial edge darkening.
-
-            # ── Perturb surface normal with height gradient ──
-            # Sample height at neighbours for finite-difference normal
-            h_c = h_disp
-            def h_at(ox, oy):
-                # Re-sampling h_disp at offsets is expensive but correct.
-                # For simplicity, approximate the perturbation on the sphere
-                # normal by directly modulating N·H based on a fake tangent
-                # slope derived from the 2D height gradient in texture space.
-                return h_c  # fallback: no perturbation for off-samples below
-            # Approximate normal perturbation:
-            #   perturbed N ≈ normalize(N + (dh/dx * T_x + dh/dy * T_y))
-            # where T_x, T_y are tangent vectors in screen space.
-            # Simpler: just modulate the specular contribution by height.
-            # Positive h_disp = raised = catches more light = brighter.
-            # Negative h_disp = recessed = darker.
-
-            # Heightfield shading only — NO baked specular hotspot.
-            # Previously this block computed a Blinn-Phong sphere specular
-            # (spec = (N·H)^shininess) and added spec*180 to RGB, which baked a
-            # fixed bright spot at the texture centre. With fixed per-face UV
-            # that spot sat motionless at each face's centre regardless of cube
-            # rotation — the "fixed bright spot" that masked the real API
-            # specular. Specular is now driven entirely by TinyGL's Blinn-Phong
-            # path (light.c) via glMaterialfv(GL_SPECULAR) + glLightModeli
-            # (LOCAL_VIEWER), so it wanders as the cube turns. The base texture
-            # keeps only diffuse relief: height modulates a soft directional
-            # shade so bumps/scratches/pits read as 3D without a static hotspot.
-            height_mod = 1.0 + h_disp / 255.0  # ~[0.7, 1.3]
-            if height_mod < 0.5: height_mod = 0.5
-            if height_mod > 1.5: height_mod = 1.5
-            # soft diffuse shade from the heightfield's implied normal tilt:
-            # raised catch more of the directional fill, recessed catch less.
-            shade = 0.65 + 0.35 * (h_disp / 128.0 + 1.0)  # ~[0.3, 1.0], stronger contrast
-
-            r = max(0, min(255, int((base + streak) * height_mod * shade)))
-            g = max(0, min(255, int((base + streak) * height_mod * shade)))
-            b = max(0, min(255, int((base + streak) * height_mod * shade) + 6))
-
+            r = max(0, min(255, int(r)))
+            g = max(0, min(255, int(g)))
+            b = max(0, min(255, int(b)))
             i = (y * width + x) * 3
             buf[i] = r; buf[i+1] = g; buf[i+2] = b
     return buf

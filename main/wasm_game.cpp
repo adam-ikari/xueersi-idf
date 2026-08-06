@@ -165,7 +165,7 @@ struct material_t {
 static const material_t s_materials[] = {
     // base        reflect      refl_w  spec                    shin   metal?
     // base        reflect      refl_w  spec                    shin   metal?
-    { TEX_METAL,   TEX_REFLECT, 1.0f,   {1.00f,1.00f,1.00f,1.0f}, 80.0f, true  },  // 金属
+    { TEX_METAL,   TEX_REFLECT, 1.0f,   {1.00f,1.00f,1.00f,1.0f}, 20.0f, true  },  // 金属
     { TEX_BRICK,   0,           0.0f,   {0.10f,0.10f,0.10f,1.0f},  8.0f, false },  // 砖块
     { TEX_SAND,    0,           0.0f,   {0.15f,0.15f,0.15f,1.0f}, 12.0f, false },  // 沙石
 };
