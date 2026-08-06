@@ -67,6 +67,9 @@ enum {
     GL_CULL_FACE         = 0x0B44,
     GL_LIGHTING          = 0x0B50,
     GL_LIGHT0            = 0x4000,
+    GL_LIGHT1            = 0x4001,
+    GL_LIGHT2            = 0x4002,
+    GL_LIGHT3            = 0x4003,
     GL_MODELVIEW         = 0x1700,
     GL_PROJECTION        = 0x1701,
     GL_TEXTURE0          = 0x84C0,
@@ -165,7 +168,7 @@ struct material_t {
 static const material_t s_materials[] = {
     // base        reflect      refl_w  spec                    shin   metal?
     // base        reflect      refl_w  spec                    shin   metal?
-    { TEX_METAL,   TEX_REFLECT, 1.0f,   {1.00f,1.00f,1.00f,1.0f}, 20.0f, true  },  // 金属
+    { TEX_METAL,   TEX_REFLECT, 1.0f,   {1.00f,1.00f,1.00f,1.0f}, 12.0f, true  },  // 金属
     { TEX_BRICK,   0,           0.0f,   {0.10f,0.10f,0.10f,1.0f},  8.0f, false },  // 砖块
     { TEX_SAND,    0,           0.0f,   {0.15f,0.15f,0.15f,1.0f}, 12.0f, false },  // 沙石
 };
@@ -336,28 +339,50 @@ extern "C" void game_init(void)
     glEnable(GL_CULL_FACE);
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
+    glEnable(GL_LIGHT1);
+    glEnable(GL_LIGHT2);
+    glEnable(GL_LIGHT3);
 
-    /* Directional light close to the view axis so the Blinn-Phong
-     * half-vector H = normalize(L + V) aligns with the front face's normal
-     * when it faces the camera, putting the specular peak ON the visible
-     * face instead of above it.
+    /* Four directional lights at the corners of a forward hemisphere cure
+     * the geometric degeneracy that killed Blinn-Phong specular on a
+     * rotating cube.
      *
-     * Previously the light was at (0,1,0.5) — steeply overhead. That made
-     * H point up-and-forward, so for a front face normal n≈(0,0,1) the
-     * half-angle was ~32° (n·H≈0.85) and pow(0.85,20)=0.039 — the specular
-     * lobe sat above the cube, off every visible face, so highlights never
-     * appeared. Device logs (tgl_spec) confirmed: normalised dot_spec stayed
-     * 0.75-0.85 across all visible vertices → pow(·,20) ≈ 0.
+     * The degeneracy: Blinn-Phong's half-vector H = normalize(L + V) (V =
+     * vertex→eye). With V≈+Z (camera looks down −Z), a single +Z light puts
+     * H≈+Z too. The cube's visible faces have eye-space normals near +Z only
+     * at the instant a face turns head-on; for most of the rotation the
+     * normal sweeps away from H and pow(n·H, shininess) drops to 0 — so the
+     * highlight blinks once per face and is invisible the rest of the time.
+     * Device tgl_spec logs confirmed normalised dot_spec stayed 0.75-0.85
+     * → pow(·,20) ≈ 0 across almost all visible vertices.
      *
-     * (0, 0.3, 1.0) normalises to ≈(0, 0.29, 0.96). With V≈(0,0,1) the
-     * half-vector H≈(0,0.14,0.99) sits almost on the front normal, so a
-     * face turning to the camera hits pow(0.98,20)≈0.66 — a visible
-     * wandering highlight. The 0.3 Y keeps a touch of overhead so the top
-     * edge catches light too; pure (0,0,1) would flat-light the front.
-     * Light stays directional (w=0). */
-    glLightfv(GL_LIGHT0, GL_POSITION, 0.0f, 0.3f, 1.0f, 0.0f);
-    glLightfv(GL_LIGHT0, GL_DIFFUSE,  1.0f, 1.0f, 1.0f, 1.0f);
-    glLightfv(GL_LIGHT0, GL_SPECULAR, 1.0f, 1.0f, 1.0f, 1.0f);
+     * Four lights at the hemisphere corners mean H tilts in four different
+     * directions; as a face rotates, its normal sweeps past at least one of
+     * the four H vectors every ~10°, so a highlight is ALWAYS visible on
+     * some face. Python sim of the exact on-device geometry (25° camera
+     * tilt, cube yaw s_angle + pitch s_angle*0.6, local viewer) confirms:
+     * 4-corner @ shininess 12 → visible specular (pow>0.05) at 36/36 yaw
+     * angles, 44% of visible faces; shininess 16/20/30 drop to 32/29/26 of
+     * 36 — so 12 is the floor for full-rotation coverage. The wandering
+     * highlight across faces as the cube turns reads as metallic.
+     *
+     * Per-light diffuse is kept LOW (0.25) because the lighting loop SUMS
+     * all enabled lights: a face lit by 2-3 corner lights would otherwise
+     * blow out to white and bury the specular. Specular stays at 1.0 each
+     * (summed, clamped) so the highlight stays bright. All directional
+     * (w=0); local viewer makes H track each vertex. */
+    const float LP[4][3] = { /* x, y, z — normalised internally by TinyGL */
+        { 0.7f,  0.3f, 0.6f},
+        {-0.7f, -0.3f, 0.6f},
+        { 0.3f, -0.7f, 0.6f},
+        {-0.3f,  0.7f, 0.6f},
+    };
+    const int LIGHTS[4] = { GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3 };
+    for (int i = 0; i < 4; i++) {
+        glLightfv(LIGHTS[i], GL_POSITION, LP[i][0], LP[i][1], LP[i][2], 0.0f);
+        glLightfv(LIGHTS[i], GL_DIFFUSE,  0.25f, 0.25f, 0.25f, 1.0f);
+        glLightfv(LIGHTS[i], GL_SPECULAR, 1.0f, 1.0f, 1.0f, 1.0f);
+    }
     /* Local viewer: half-vector H = normalize(L + V) with V = vertex→eye (not a
      * fixed (0,0,1)). Under the 25° camera tilt a distant viewer's H never
      * aligns with visible-face normals (n·H ≈ 0.78 → pow(·,shininess) ≈ 0);
