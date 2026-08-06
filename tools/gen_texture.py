@@ -302,12 +302,48 @@ def gen_specular(width: int, height: int) -> bytearray:
     return buf
 
 
+def _reflect_color(ry: float,
+                   sky_top, sky_hor, ground) -> tuple:
+    """Map a reflection vector's Y component ry ∈ [-1,1] (+1=zenith/sky,
+    -1=nadir/ground, 0=horizon) to an RGB triple. ry>0 blends horizon→sky,
+    ry<0 blends horizon→ground. Shared by the in-disc and out-of-disc paths
+    so the whole texture is coloured by R.y — never a flat horizon fill."""
+    sky_top_r, sky_top_g, sky_top_b = sky_top
+    sky_hor_r, sky_hor_g, sky_hor_b = sky_hor
+    ground_r, ground_g, ground_b = ground
+    if ry > 0.0:
+        blend = ry
+        return (int(sky_hor_r + (sky_top_r - sky_hor_r) * blend),
+                int(sky_hor_g + (sky_top_g - sky_hor_g) * blend),
+                int(sky_hor_b + (sky_top_b - sky_hor_b) * blend))
+    else:
+        blend = -ry
+        return (int(sky_hor_r + (ground_r - sky_hor_r) * blend),
+                int(sky_hor_g + (ground_g - sky_hor_g) * blend),
+                int(sky_hor_b + (ground_b - sky_hor_b) * blend))
+
+
 def gen_reflect(width: int, height: int) -> bytearray:
     """Environment reflection map: spherical projection of sky + desert ground.
 
-    UV mapped as a sphere-map: u = (R.x+1)/2, v = (R.z+1)/2 where R is the
-    reflected view vector. For a cube face-normal viewer, this gives sky
-    reflection near the top and ground near the bottom, with a smooth horizon.
+    UV mapped as a sphere-map: the forward map in vertex.c is
+        u=normalize(pe), R=u-2(n·u)n, m=2·sqrt(Rx²+Ry²+(Rz+1)²),
+        s=Rx/m+0.5, t=Ry/m+0.5
+    so each face's reflected ray R indexes this texture. We invert that map
+    per-texel to recover R.y (sky vs ground) and colour by it: faces whose
+    reflection points up read sky, down read ground.
+
+    KEY: the whole texture is coloured by R.y, not just the central disc.
+    The sphere-map valid disc (r2<0.25) covers only reflections whose R.z≈+1
+    (ray pointing at the viewer). Most faces on a rotating cube have R.z
+    small or negative (reflection pointing away/sideways) → their (s,t)
+    land OUTSIDE the disc. Previously those texels were a flat horizon blue,
+    so the reflection showed NO sky/ground variation — just uniform blue
+    added onto the metal (the user's "28% sky blue overlaid on metal"
+    complaint). Now the out-of-disc region is also coloured by R.y: the
+    disc boundary r2=0.25 is R.z=0 (horizon), and beyond it R.z<0 with the
+    R.y sign still carried by v=2t-1, so we use ry=v (clamped) there. This
+    makes every face's reflection resolve to sky-or-ground by orientation.
 
     The texture is radially symmetric around the center, matching the
     Blinn-Phong specular lobe so that the combined effect (base metal +
@@ -316,9 +352,9 @@ def gen_reflect(width: int, height: int) -> bytearray:
     buf = bytearray(width * height * 3)
 
     # Sky colors — high contrast for mirror-like reflection
-    sky_top_r, sky_top_g, sky_top_b = 80, 140, 220     # bright deep blue
-    sky_hor_r, sky_hor_g, sky_hor_b = 180, 210, 240    # bright horizon blue-white
-    ground_r, ground_g, ground_b = 160, 120, 60        # deep desert sand
+    sky_top = (80, 140, 220)     # bright deep blue (zenith)
+    sky_hor = (180, 210, 240)    # bright horizon blue-white
+    ground  = (160, 120, 60)     # deep desert sand (nadir)
 
     for y in range(height):
         for x in range(width):
@@ -327,12 +363,6 @@ def gen_reflect(width: int, height: int) -> bytearray:
             # Forward (vertex.c): m=2·sqrt(Rx²+Ry²+(Rz+1)²), s=Rx/m+0.5,
             #   t=Ry/m+0.5. Inverting (u=2s-1, v=2t-1, r2=u²+v²):
             #   R.z = 1-2·r2,  R.x = u·2·sqrt(1-r2),  R.y = v·2·sqrt(1-r2).
-            # The previous implementation coloured by dy_n (the texel's own
-            # normalized (dx,dy,rz) y), which is NOT R.y — the forward map is
-            # nonlinear and R.z-dependent, so mid-t ground reflections (e.g.
-            # t≈0.32) landed where dy_n≈0 → horizon blue instead of sand, and
-            # the whole reflection read as "only sky blue". Colouring by the
-            # true R.y fixes this: ground t-values now map to real sand.
             # OpenGL t=0 is bottom (ground), t=1 is top (sky). In image space
             # y=0 is the top row, so t must flip: t=1 at y=0 (sky), t=0 at
             # y=height (ground).
@@ -343,24 +373,20 @@ def gen_reflect(width: int, height: int) -> bytearray:
             r2 = u * u + v * v
 
             if r2 < 0.2501:
+                # Inside the valid disc — exact R.y from the inverse map.
                 f = 4.0 * math.sqrt(1.0 - 4.0 * r2)
-                ry = v * f  # R.y in [-1,1]: +1=zenith(sky), -1=nadir(ground), 0=horizon
-
-                if ry > 0.0:
-                    # Sky side — blend horizon blue → deep blue (ry: 0→1)
-                    blend = ry
-                    r = int(sky_hor_r + (sky_top_r - sky_hor_r) * blend)
-                    g = int(sky_hor_g + (sky_top_g - sky_hor_g) * blend)
-                    b = int(sky_hor_b + (sky_top_b - sky_hor_b) * blend)
-                else:
-                    # Ground side — blend horizon blue → sand (ry: 0→-1)
-                    blend = -ry
-                    r = int(sky_hor_r + (ground_r - sky_hor_r) * blend)
-                    g = int(sky_hor_g + (ground_g - sky_hor_g) * blend)
-                    b = int(sky_hor_b + (ground_b - sky_hor_b) * blend)
+                ry = v * f  # R.y in [-1,1]: +1=zenith(sky), -1=nadir(ground)
             else:
-                # Outside the valid disc (r2 >= 1/4) — fill horizon blue.
-                r, g, b = sky_hor_r, sky_hor_g, sky_hor_b
+                # Outside the valid disc (r2 >= 1/4): the exact inverse goes
+                # imaginary (R.z<0, ray pointing away from viewer). But R.y's
+                # sign and rough magnitude are still carried by v=2t-1, and
+                # the disc boundary is the horizon (R.y=0). Use ry=v clamped
+                # to [-1,1] so this region still resolves sky-vs-ground by
+                # vertical reflection direction instead of a flat blue fill.
+                # This is the fix for "reflection should compute ground vs
+                # sky, not overlay uniform sky blue".
+                ry = max(-1.0, min(1.0, v))
+            r, g, b = _reflect_color(ry, sky_top, sky_hor, ground)
 
             i = (y * width + x) * 3
             buf[i] = max(0, min(255, r))

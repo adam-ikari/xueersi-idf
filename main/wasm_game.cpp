@@ -337,11 +337,25 @@ extern "C" void game_init(void)
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
 
-    /* Directional light from overhead-front, close to the view axis so visible
-     * faces can reflect it. With GL_LIGHT_MODEL_LOCAL_VIEWER the half-vector
-     * uses the per-vertex view direction, so highlights land on the visible
-     * faces and wander as the cube rotates. Normalised dir ≈ (0, 0.89, 0.45). */
-    glLightfv(GL_LIGHT0, GL_POSITION, 0.0f, 1.0f, 0.5f, 0.0f);
+    /* Directional light close to the view axis so the Blinn-Phong
+     * half-vector H = normalize(L + V) aligns with the front face's normal
+     * when it faces the camera, putting the specular peak ON the visible
+     * face instead of above it.
+     *
+     * Previously the light was at (0,1,0.5) — steeply overhead. That made
+     * H point up-and-forward, so for a front face normal n≈(0,0,1) the
+     * half-angle was ~32° (n·H≈0.85) and pow(0.85,20)=0.039 — the specular
+     * lobe sat above the cube, off every visible face, so highlights never
+     * appeared. Device logs (tgl_spec) confirmed: normalised dot_spec stayed
+     * 0.75-0.85 across all visible vertices → pow(·,20) ≈ 0.
+     *
+     * (0, 0.3, 1.0) normalises to ≈(0, 0.29, 0.96). With V≈(0,0,1) the
+     * half-vector H≈(0,0.14,0.99) sits almost on the front normal, so a
+     * face turning to the camera hits pow(0.98,20)≈0.66 — a visible
+     * wandering highlight. The 0.3 Y keeps a touch of overhead so the top
+     * edge catches light too; pure (0,0,1) would flat-light the front.
+     * Light stays directional (w=0). */
+    glLightfv(GL_LIGHT0, GL_POSITION, 0.0f, 0.3f, 1.0f, 0.0f);
     glLightfv(GL_LIGHT0, GL_DIFFUSE,  1.0f, 1.0f, 1.0f, 1.0f);
     glLightfv(GL_LIGHT0, GL_SPECULAR, 1.0f, 1.0f, 1.0f, 1.0f);
     /* Local viewer: half-vector H = normalize(L + V) with V = vertex→eye (not a
