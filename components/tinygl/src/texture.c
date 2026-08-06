@@ -4,7 +4,7 @@
 
 #include "zgl.h"
 
-GLTexture* find_texture(GLint h) {
+static GLTexture* find_texture(GLint h) {
 	GLTexture* t;
 	GLContext* c = gl_get_context();
 	t = c->shared_state.texture_hash_table[h & TEXTURE_HASH_TABLE_MASK];

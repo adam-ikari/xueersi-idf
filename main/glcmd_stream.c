@@ -272,10 +272,13 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
             glSetEnableSpecular((GLint)read_u32(&p));
             break;
         case GLCMD_TEX_GENI: {
-            GLint coord = (GLint)read_u32(&p);
-            GLint pname = (GLint)read_u32(&p);
-            GLint param = (GLint)read_u32(&p);
-            glTexGeni(coord, pname, param);
+            /* TinyGL no longer implements sphere-map texgen (the reflection
+             * mechanism was removed). The opcode + host encoder + NativeSymbol
+             * are retained so the WASM API surface stays complete; the three
+             * u32 payload words are consumed here and dropped — a no-op. */
+            (void)read_u32(&p);
+            (void)read_u32(&p);
+            (void)read_u32(&p);
             break;
         }
 

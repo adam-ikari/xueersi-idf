@@ -528,16 +528,13 @@ void glTexImage1D(GLint target, GLint level, GLint components, GLint width, GLin
 }
 
 void glBindTexture(GLint target, GLint texture) {
-	GLContext *c = gl_get_context();
-	GLTexture *t = find_texture(texture);
-	if (t == NULL) {
-		t = alloc_texture(texture);
-	}
-	if (t == NULL) {
-		gl_fatal_error("GL_OUT_OF_MEMORY");
-	}
-	c->current_texture = t;
-	c->tex_unit[c->active_texture_unit].texture = t;
+	GLParam p[3];
+#include "error_check_no_context.h"
+	p[0].op = OP_BindTexture;
+	p[1].i = target;
+	p[2].i = texture;
+
+	gl_add_op(p);
 }
 
 void glActiveTexture(GLenum texture) {
@@ -578,21 +575,6 @@ void glTexOffset(GLenum unit, GLfloat u, GLfloat v) {
 	if (idx < 0 || idx >= MAX_TEXTURE_UNITS) return;
 	c->tex_unit[idx].u_off = u;
 	c->tex_unit[idx].v_off = v;
-}
-
-/* Sphere-map texcoord generation mode (standard OpenGL reflection API).
- * Only GL_SPHERE_MAP is supported. The mode is per-unit; sphere-map always
- * applies to both S and T together, so coord (GL_S/GL_T) is accepted but the
- * mode is stored once per unit. Actual reflection coords are computed in
- * vertex.c from the eye-space normal when gen is enabled. */
-void glTexGeni(GLint coord, GLint pname, GLint param) {
-	GLContext *c = gl_get_context();
-	int unit = c->active_texture_unit;
-	if (pname == GL_TEXTURE_GEN_MODE) {
-		if (param != GL_SPHERE_MAP) return; /* only sphere-map supported */
-		c->tex_unit[unit].gen_mode = param;
-	}
-	(void)coord; /* GL_S/GL_T accepted; sphere-map mode is per-unit */
 }
 
 void glTexParameteri(GLint target, GLint pname, GLint param) {

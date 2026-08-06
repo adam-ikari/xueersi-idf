@@ -324,77 +324,81 @@ def _reflect_color(ry: float,
 
 
 def gen_reflect(width: int, height: int) -> bytearray:
-    """Environment reflection map for the cheap normal-driven sphere-map.
+    """Environment reflection map: spherical projection of sky + desert ground.
 
-    The kernel (vertex.c) no longer uses the real sphere-projection math.
-    It uses a cheap offset-scroll approximation driven by the eye-space
-    normal:  s2 = 0.5 + 0.5·n.X,  t2 = 0.5 + 0.5·n.Y  (clamped [0,1]).
-    So the texture's (s,t) layout MUST match that mapping, not the old
-    valid-disc sphere-map layout:
+    UV mapped as a sphere-map: u = (R.x+1)/2, v = (R.z+1)/2 where R is the
+    reflected view vector. For a cube face-normal viewer, this gives sky
+    reflection near the top and ground near the bottom, with a smooth horizon.
 
-      t axis (vertical) is the PRIMARY axis — it tracks n.Y:
-        t=1 (top row,    n.Y=+1, normal pointing up)    -> SKY (zenith)
-        t=0 (bottom row, n.Y=-1, normal pointing down)  -> GROUND (nadir)
-        t=0.5 (middle,   n.Y= 0)                        -> HORIZON
-      s axis (horizontal) tracks n.X — gives visible sideways scroll as
-      the cube yaws. A gentle horizontal hue gradient (sky bluer on one
-      side, warmer on the other; ground sandier vs rockier) makes the
-      Y-rotation reflection walk readable, without breaking the sky/ground
-      split that t alone determines.
+    The texture is radially symmetric around the center, matching the
+    Blinn-Phong specular lobe so that the combined effect (base metal +
+    reflect ADD + specular ADD) reads as polished metal.
 
-    This is the "fake" reflection the user asked for: an OpenGL 1.x
-    sphere-map API surface (glTexGeni GL_SPHERE_MAP + GL_TEXTURE_GEN_S/T)
-    with the heavy math replaced by a 2-mul normal-driven offset, and a
-    texture painted to match. Zero sqrt, zero reflection vector."""
+    Orientation note: with TinyGL's row-0==t=0 convention, this layout puts
+    GROUND at t=0 (image upper half, dy<0) and SKY at t=1 (image lower half,
+    dy>0). The restored 2689a01 wasm samples unit1 with the shared fixed UV
+    (t=0 near edge, t=1 far edge), so each cube face reads sky-above /
+    ground-below — consistent with the skybox. The 3a04ad8 t-flip (sky at
+    t=0) inverted this and made the metal cube reflect desert where the sky
+    should be; do not re-introduce it."""
+    import math
     buf = bytearray(width * height * 3)
+    cx, cy = width / 2.0, height / 2.0
+    max_r = min(cx, cy)
 
-    # Sky / ground palette — high contrast for a mirror-like read.
-    sky_top = (70, 130, 215)     # zenith deep blue
-    sky_hor = (185, 210, 235)    # horizon blue-white
-    ground  = (150, 115, 55)     # desert sand (nadir)
-    ground_hor = (170, 140, 80)  # distant ground near horizon (warmer)
+    # Sky colors
+    sky_top_r, sky_top_g, sky_top_b = 60, 100, 180     # deep blue
+    sky_hor_r, sky_hor_g, sky_hor_b = 150, 190, 230    # horizon blue-white
+    ground_r, ground_g, ground_b = 210, 170, 110        # desert sand
 
     for y in range(height):
         for x in range(width):
-            # Texel -> (s,t). Image y=0 is the TOP row -> t=1 (sky).
-            s = (x + 0.5) / width
-            t = 1.0 - (y + 0.5) / height
-            # ry in [-1,1]: +1=sky, -1=ground. This IS n.Y under the cheap map.
-            ry = 2.0 * t - 1.0
-            # Horizontal variation factor in [-1,1]: adds a sideways hue
-            # shift so yaw rotation reads as a walking reflection. Small
-            # amplitude — the sky/ground split stays governed by ry.
-            hx = 2.0 * s - 1.0
+            dx = (x - cx) / max_r
+            dy = (y - cy) / max_r
 
-            if ry >= 0.0:
-                # Sky half: horizon (ry=0) -> zenith (ry=1). Shift the blue
-                # toward a warmer/orangier horizon on one side (sun glow) so
-                # horizontal motion has visible colour change.
-                blend = ry
-                r = sky_hor[0] + (sky_top[0] - sky_hor[0]) * blend
-                g = sky_hor[1] + (sky_top[1] - sky_hor[1]) * blend
-                b = sky_hor[2] + (sky_top[2] - sky_hor[2]) * blend
-                # Sun-glow warmth on the +s side, cooler on -s side.
-                glow = 0.18 * (1.0 - ry) * max(0.0, hx)
-                r += 35.0 * glow
-                g += 18.0 * glow
-                b -= 10.0 * glow
+            # Sphere-map: reflected view vector R at pixel (dx, dy)
+            # For a sphere-map: r² = dx² + dy², and R.z = 1 - r²
+            r2 = dx*dx + dy*dy
+            if r2 < 1.0:
+                # R = (dx, dy, 1 - r2) normalized
+                rz = 1.0 - r2  # actually this IS rz unnormalized since nz=1
+                # Compute normalized R from the sphere-map projection
+                inv_len = 1.0 / math.sqrt(r2 + rz*rz)
+                dx_n = dx * inv_len
+                dy_n = dy * inv_len
+                rz_n = rz * inv_len
+
+                # Use R.y (vertical component) for sky/ground blending
+                ry = dy_n  # [-1, 1]  (-1 = ground, +1 = sky)
+
+                if ry > 0.0:
+                    # Sky side — blend deep blue → horizon white
+                    t = ry   # 0 (horizon) → 1 (zenith)
+                    r = int(sky_hor_r + (sky_top_r - sky_hor_r) * t)
+                    g = int(sky_hor_g + (sky_top_g - sky_hor_g) * t)
+                    b = int(sky_hor_b + (sky_top_b - sky_hor_b) * t)
+                else:
+                    # Ground side — sand
+                    t = -ry   # 0 (horizon) → 1 (nadir)
+                    r = int(ground_r - 30 * t)
+                    g = int(ground_g - 40 * t)
+                    b = int(ground_b - 35 * t)
+
+                # Fade near the mirror edge (horizon blur)
+                edge = 1.0 - r2   # 0 at edge, 1 at center
+                if edge < 0.15:
+                    f = edge / 0.15
+                    r = int(f * r + (1 - f) * sky_hor_r)
+                    g = int(f * g + (1 - f) * sky_hor_g)
+                    b = int(f * b + (1 - f) * sky_hor_b)
             else:
-                # Ground half: horizon (ry=0) -> nadir (ry=-1). Sandier near
-                # horizon, rockier/darker at nadir; a slight sideways shift
-                # so yaw motion reads.
-                blend = -ry
-                r = ground_hor[0] + (ground[0] - ground_hor[0]) * blend
-                g = ground_hor[1] + (ground[1] - ground_hor[1]) * blend
-                b = ground_hor[2] + (ground[2] - ground_hor[2]) * blend
-                r += 10.0 * hx
-                g += 6.0 * hx
-                b += 2.0 * hx
+                # Outside the sphere — horizon blue
+                r, g, b = sky_hor_r, sky_hor_g, sky_hor_b
 
             i = (y * width + x) * 3
-            buf[i]   = max(0, min(255, int(r)))
-            buf[i+1] = max(0, min(255, int(g)))
-            buf[i+2] = max(0, min(255, int(b)))
+            buf[i] = max(0, min(255, r))
+            buf[i+1] = max(0, min(255, g))
+            buf[i+2] = max(0, min(255, b))
     return buf
 
 

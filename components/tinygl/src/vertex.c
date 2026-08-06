@@ -146,43 +146,8 @@ static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
 	v->zp.b = (GLint)(v->color.v[2] * COLOR_CORRECTED_MULT_MASK + COLOR_MIN_MULT) & COLOR_MASK;
 
 	if (c->texture_2d_enabled) {
-		v->zp.s = (GLint)(v->tex_coord.X * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
-		v->zp.t = (GLint)(v->tex_coord.Y * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
-	}
-
-	if (c->any_gen_enabled && c->lighting_enabled) {
-		/* Cheap "fake" environment reflection — an offset-scroll
-		 * approximation driven by the eye-space normal. The kernel owns
-		 * the offset computation (the API caller just enables
-		 * GL_TEXTURE_GEN_S/T + GL_SPHERE_MAP and is never told how the
-		 * coords are derived), so there is zero burden on the WASM side.
-		 *
-		 * This deliberately does NOT use the real sphere-projection math
-		 * (R = u − 2(n·u)n, m = 2√(R.x²+R.y²+(R.z+1)²), s=R.x/m+0.5) —
-		 * that per-vertex sqrt + reflection-vector work was overkill for
-		 * a 12-vertex cube and produced edge cases (out-of-disc faces,
-		 * static reflections under view/rotation cancellation). Instead
-		 * the reflection texture is scrolled by the normal's X/Y
-		 * components: a face whose normal points up reads sky (t→1),
-		 * down reads ground (t→0), and Y-axis rotation scrolls the
-		 * texture sideways (s). Head-on (n.X=n.Y=0) sits at the texture
-		 * centre (horizon), grazing faces spread to the edge — the same
-		 * boundary behaviour as sphere-map, at 2 mul-adds/vertex.
-		 *
-		 * Performance: when GL_NORMALIZE is on (it is, in game_init),
-		 * gl_vertex_transform has ALREADY unit-lengthened v->normal, so
-		 * we skip the defensive re-normalize here — that saves a sqrt +
-		 * divide per reflective vertex. Only re-normalize if the app
-		 * left GL_NORMALIZE off. */
-		V3 n = v->normal;
-		if (!c->normalize_enabled)
-			gl_V3_Norm_Fast(&n);
-		GLfloat sf = 0.5f + 0.5f * n.X;
-		GLfloat tf = 0.5f + 0.5f * n.Y;
-		if (sf < 0.0f) sf = 0.0f; else if (sf > 1.0f) sf = 1.0f;
-		if (tf < 0.0f) tf = 0.0f; else if (tf > 1.0f) tf = 1.0f;
-		v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
-		v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
+		v->zp.s = (GLint)(v->tex_coord.X * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN); 
+		v->zp.t = (GLint)(v->tex_coord.Y * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN); 
 	}
 }
 

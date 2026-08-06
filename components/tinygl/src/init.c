@@ -339,7 +339,6 @@ void glInit(void* zbuffer1) {
 	c->specbuf_num_buffers = 0;
 #endif
 	c->zEnableSpecular = 0;
-	c->any_gen_enabled = 0;
 	c->use_affine_texture = 0;
 #if TGL_FEATURE_ZINV_LUT == 1
 	zinv_lut_init();

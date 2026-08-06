@@ -137,24 +137,6 @@ void glopEnableDisable(GLParam* p) {
 		else
 			c->offset_states &= ~TGL_OFFSET_LINE;
 		break;
-	case GL_TEXTURE_GEN_S: {
-		int unit = c->active_texture_unit;
-		c->tex_unit[unit].gen_s_enabled = v;
-		c->any_gen_enabled = 0;
-		for (int i = 0; i < MAX_TEXTURE_UNITS; i++)
-			if (c->tex_unit[i].gen_s_enabled || c->tex_unit[i].gen_t_enabled)
-				{ c->any_gen_enabled = 1; break; }
-		break;
-	}
-	case GL_TEXTURE_GEN_T: {
-		int unit = c->active_texture_unit;
-		c->tex_unit[unit].gen_t_enabled = v;
-		c->any_gen_enabled = 0;
-		for (int i = 0; i < MAX_TEXTURE_UNITS; i++)
-			if (c->tex_unit[i].gen_s_enabled || c->tex_unit[i].gen_t_enabled)
-				{ c->any_gen_enabled = 1; break; }
-		break;
-	}
 	default:
 		if (code >= GL_LIGHT0 && code < GL_LIGHT0 + MAX_LIGHTS) {
 			gl_enable_disable_light(code - GL_LIGHT0, v);

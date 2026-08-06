@@ -1,6 +1,7 @@
 #include "../include/zbuffer.h"
 #include "msghandling.h"
 #include "zgl.h"   /* GLTextureUnit, MAX_TEXTURE_UNITS for multi-texture */
+#include "esp_log.h"
 #include <stdlib.h>
 
 /* Exact vertex color of an unlit full-bright vertex (glColor 1,1,1 with
@@ -13,26 +14,22 @@
 /* Per-triangle precomputed extra-unit blend params (filled in DRAW_INIT). */
 typedef struct {
     const uint8_t *data;   /* texture pixmap */
-    int s_off, t_off;      /* integer UV offset added per pixel (use_gen==0) */
+    int s_off, t_off;      /* integer UV offset added per pixel */
     int w8;                /* blend weight in 0..256 */
-    int use_gen;           /* 1 = sample at interpolated sphere-map (s2,t2), 0 = (s+s_off,t+t_off) */
 } tgl_extra_tex_t;
 
 /* GL_ADD multi-texture blend: unit 0 (default_tex) plus each active extra unit
  * (w/8 * tex), clamped. Channels extracted on the LOGICAL layout (unswapped);
- * result re-swapped so callers see a byte-swapped word.
- * s2/t2 are the interpolated sphere-map reflection coords (used when the
- * corresponding extra unit has use_gen==1); s/t are the primary coords. */
+ * result re-swapped so callers see a byte-swapped word. */
 static inline PIXEL tgl_multitex_sample_prepared(
     const tgl_extra_tex_t *extra, int n_extra,
-    int s, int t, int s2, int t2, const uint8_t *default_tex)
+    int s, int t, const uint8_t *default_tex)
 {
     PIXEL result = default_tex ? *(PIXEL *)(default_tex + ST_TO_TEXTURE_BYTE_OFFSET(s, t)) : 0;
     for (int i = 0; i < n_extra; i++) {
-        int us, ut;
-        if (extra[i].use_gen) { us = s2; ut = t2; }
-        else { us = s + extra[i].s_off; ut = t + extra[i].t_off; }
-        PIXEL c = *(PIXEL *)(extra[i].data + ST_TO_TEXTURE_BYTE_OFFSET(us, ut));
+        int s2 = s + extra[i].s_off;
+        int t2 = t + extra[i].t_off;
+        PIXEL c = *(PIXEL *)(extra[i].data + ST_TO_TEXTURE_BYTE_OFFSET(s2, t2));
         int w8 = extra[i].w8;
         PIXEL u0 = TGL_BSWAP16(result);
         PIXEL uc = TGL_BSWAP16(c);
@@ -51,7 +48,7 @@ static inline PIXEL tgl_multitex_sample_prepared(
 
 /* Diagnostic: count of triangles rasterized with multi-texture active (core 1). */
 volatile int tgl_multitex_tris = 0;
-volatile int tgl_dbg_addmode = 0;   /* legacy diagnostic counter (no longer incremented in rasterizer) */
+volatile int tgl_dbg_addmode = 0;   /* any unit 1+ with env_mode==GL_ADD (diagnostic) */
 
 
 
@@ -362,7 +359,6 @@ static inline float fast_inv_z(float fzl) {
 		register GLint n;                                                                                                                                      \
 		OR1OG1OB1DECL                                                                                                                                          \
 		GLfloat sz, tz, fzl, zinv;                                                                                                                             \
-		GLfloat ss, tt;                                                                                                                                        \
 		n = (x2 >> 16) - x1;                                                                                                                                   \
 		fzl = (GLfloat)z1;                                                                                                                                     \
 		zinv = ZINV(fzl);                                                                                                                                      \
@@ -371,26 +367,16 @@ static inline float fast_inv_z(float fzl) {
 		z = z1;                                                                                                                                                \
 		sz = sz1;                                                                                                                                              \
 		tz = tz1;                                                                                                                                              \
-		GLint s2 = 0, t2 = 0, ds2dx = 0, dt2dx = 0;                                                                                                            \
-		GLfloat sz2 = 0.0f, tz2 = 0.0f;                                                                                                                          \
-		(void)s2; (void)t2; (void)ds2dx; (void)dt2dx; (void)sz2; (void)tz2;                                                                                    \
-		if (gen_active) { sz2 = sz1_2; tz2 = tz1_2; }                                                                                                          \
 		while (n >= (NB_INTERP - 1)) {                                                                                                                         \
 			register GLint dsdx, dtdx;                                                                                                                         \
 			{                                                                                                                                                  \
+				GLfloat ss, tt;                                                                                                                                \
 				ss = (sz * zinv);                                                                                                                              \
 				tt = (tz * zinv);                                                                                                                              \
 				s = (GLint)ss;                                                                                                                                 \
 				t = (GLint)tt;                                                                                                                                 \
 				dsdx = (GLint)((dszdx - ss * fdzdx) * zinv);                                                                                                   \
 				dtdx = (GLint)((dtzdx - tt * fdzdx) * zinv);                                                                                                   \
-			}                                                                                                                                                  \
-			if (gen_active) {                                                                                                                                  \
-				GLfloat ss2 = sz2 * zinv, tt2 = tz2 * zinv;                                                                                                    \
-				s2 = (GLint)ss2;                                                                                                                               \
-				t2 = (GLint)tt2;                                                                                                                               \
-				ds2dx = (GLint)((dszdx2 - ss2 * fdzdx) * zinv);                                                                                                \
-				dt2dx = (GLint)((dtzdx2 - tt2 * fdzdx) * zinv);                                                                                                \
 			}                                                                                                                                                  \
 			fzl += fndzdx;                                                                                                                                     \
 			zinv = ZINV(fzl);                                                                                                                                  \
@@ -407,24 +393,17 @@ static inline float fast_inv_z(float fzl) {
 			n -= NB_INTERP;                                                                                                                                    \
 			sz += ndszdx;                                                                                                                                      \
 			tz += ndtzdx;                                                                                                                                      \
-			if (gen_active) { sz2 += ndszdx2; tz2 += ndtzdx2; }                                                                                                \
 		}                                                                                                                                                      \
 		{                                                                                                                                                      \
 			register GLint dsdx, dtdx;                                                                                                                         \
 			{                                                                                                                                                  \
+				GLfloat ss, tt;                                                                                                                                \
 				ss = (sz * zinv);                                                                                                                              \
 				tt = (tz * zinv);                                                                                                                              \
 				s = (GLint)ss;                                                                                                                                 \
 				t = (GLint)tt;                                                                                                                                 \
 				dsdx = (GLint)((dszdx - ss * fdzdx) * zinv);                                                                                                   \
 				dtdx = (GLint)((dtzdx - tt * fdzdx) * zinv);                                                                                                   \
-			}                                                                                                                                                  \
-			if (gen_active) {                                                                                                                                  \
-				GLfloat ss2 = sz2 * zinv, tt2 = tz2 * zinv;                                                                                                    \
-				s2 = (GLint)ss2;                                                                                                                               \
-				t2 = (GLint)tt2;                                                                                                                               \
-				ds2dx = (GLint)((dszdx2 - ss2 * fdzdx) * zinv);                                                                                                \
-				dt2dx = (GLint)((dtzdx2 - tt2 * fdzdx) * zinv);                                                                                                \
 			}                                                                                                                                                  \
 			while (n >= 0) {                                                                                                                                   \
 				PUT_PIXEL(0);                                                                                                                                  \
@@ -434,7 +413,7 @@ static inline float fast_inv_z(float fzl) {
 				n -= 1;                                                                                                                                        \
 			}                                                                                                                                                  \
 		}                                                                                                                                                      \
-	}
+	} 
 
 void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
 	PIXEL* texture;
@@ -443,7 +422,6 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 	int multitex_active;           /* any unit 1+ is GL_ADD + texture + weight */
 	tgl_extra_tex_t tgl_extra[3];  /* precomputed extra-unit blend params */
 	int tgl_n_extra;
-	int gen_active;                /* any extra unit using sphere-map gen coords */
 
 	GLubyte zbdw = zb->depth_write;
 	GLubyte zbdt = zb->depth_test;
@@ -451,7 +429,6 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 	TGL_STIPPLEVARS
 #define INTERP_Z
 #define INTERP_STZ
-#define INTERP_STZ2
 #define INTERP_RGB
 
 
@@ -464,31 +441,26 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 		fndzdx = NB_INTERP * fdzdx;                                                                                                                            \
 		ndszdx = NB_INTERP * dszdx;                                                                                                                            \
 		ndtzdx = NB_INTERP * dtzdx;                                                                                                                            \
-		ndszdx2 = NB_INTERP * dszdx2;                                                                                                                          \
-		ndtzdx2 = NB_INTERP * dtzdx2;                                                                                                                          \
 		unlit = (p0->r == TGL_FULL_BRIGHT && p0->g == TGL_FULL_BRIGHT && p0->b == TGL_FULL_BRIGHT  \
 		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
 		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 		tgl_units = &gl_get_context()->tex_unit[0];                                                      \
+		{ static int lg = 0; if (lg < 60) { lg++;                                                                  \
+		  ESP_LOGI("dbg", "scan tex=%p u1m=0x%x u1t=%p u1x=%d w=%.1f | u2m=0x%x", texture,                                  \
+		    tgl_units[1].env_mode, tgl_units[1].texture,                                                              \
+		    tgl_units[1].texture ? tgl_units[1].texture->images[0].xsize : -1,                                         \
+		    tgl_units[1].env_color[0], tgl_units[2].env_mode); } }                                                  \
 		tgl_n_extra = 0;                                                                                  \
-		gen_active = 0;                                                                                   \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
+			if (_u->env_mode == GL_ADD) tgl_dbg_addmode++;                                             \
 			if (_u->env_mode != GL_ADD || !_u->texture || !_u->texture->images[0].xsize) continue;          \
 			float _w = _u->env_color[0];                                                                   \
 			if (_w <= 0.0f) continue;                                                                      \
 			if (_w > 1.0f) _w = 1.0f;                                                                      \
 			tgl_extra[tgl_n_extra].data  = (const uint8_t*)_u->texture->images[0].pixmap;                  \
-			if (_u->gen_s_enabled || _u->gen_t_enabled) {                                                  \
-				tgl_extra[tgl_n_extra].use_gen = 1;                                                    \
-				tgl_extra[tgl_n_extra].s_off = 0;                                                      \
-				tgl_extra[tgl_n_extra].t_off = 0;                                                      \
-				gen_active = 1;                                                                        \
-			} else {                                                                                       \
-				tgl_extra[tgl_n_extra].use_gen = 0;                                                    \
-				tgl_extra[tgl_n_extra].s_off = (int)(_u->u_off * (1 << (1 + TGL_FEATURE_TEXTURE_POW2 + ZB_POINT_S_FRAC_BITS))); \
-				tgl_extra[tgl_n_extra].t_off = (int)(_u->v_off * (1 << ZB_POINT_T_FRAC_BITS));                  \
-			}                                                                                              \
+			tgl_extra[tgl_n_extra].s_off = (int)(_u->u_off * (1 << (1 + TGL_FEATURE_TEXTURE_POW2 + ZB_POINT_S_FRAC_BITS))); \
+			tgl_extra[tgl_n_extra].t_off = (int)(_u->v_off * (1 << ZB_POINT_T_FRAC_BITS));                  \
 			tgl_extra[tgl_n_extra].w8   = (int)(_w * 256.0f + 0.5f);                                       \
 			if (tgl_extra[tgl_n_extra].w8 > 256) tgl_extra[tgl_n_extra].w8 = 256;                          \
 			tgl_n_extra++;                                                                                  \
@@ -529,7 +501,6 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 		z += dzdx;                                                                                                                                             \
 		s += dsdx;                                                                                                                                             \
 		t += dtdx;                                                                                                                                             \
-		if (gen_active) { s2 += ds2dx; t2 += dt2dx; }                                                                                                         \
 		OR1G1B1INCR                                                                                                                                            \
 	}
 #else
@@ -537,7 +508,7 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 	{                                                                                                                                                          \
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
-			PIXEL c = multitex_active ? tgl_multitex_sample_prepared(tgl_extra, tgl_n_extra, s, t, s2, t2, (const uint8_t*)texture) : TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
+			PIXEL c = multitex_active ? tgl_multitex_sample_prepared(tgl_extra, tgl_n_extra, s, t, (const uint8_t*)texture) : TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
 			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
 				TGL_BLEND_FUNC(unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));                                                                                      \
 				if (zbdw)                                                                                                                                      \
@@ -547,7 +518,6 @@ void ZB_fillTriangleMappingPerspective(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoi
 		z += dzdx;                                                                                                                                             \
 		s += dsdx;                                                                                                                                             \
 		t += dtdx;                                                                                                                                             \
-		if (gen_active) { s2 += ds2dx; t2 += dt2dx; }                                                                                                         \
 		OR1G1B1INCR                                                                                                                                            \
 	}
 #endif
@@ -564,14 +534,12 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 	int multitex_active;           /* any unit 1+ is GL_ADD + texture + weight */
 	tgl_extra_tex_t tgl_extra[3];  /* precomputed extra-unit blend params */
 	int tgl_n_extra;
-	int gen_active;                /* any extra unit using sphere-map gen coords */
-
+	
 	GLubyte zbdw = zb->depth_write;
 	GLubyte zbdt = zb->depth_test;
 	TGL_STIPPLEVARS
 #define INTERP_Z
 #define INTERP_STZ
-#define INTERP_STZ2
 #define INTERP_RGB
 
 #define NB_INTERP 8
@@ -583,138 +551,24 @@ void ZB_fillTriangleMappingPerspectiveNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBu
 		fndzdx = NB_INTERP * fdzdx;                                                                                                                            \
 		ndszdx = NB_INTERP * dszdx;                                                                                                                            \
 		ndtzdx = NB_INTERP * dtzdx;                                                                                                                            \
-		ndszdx2 = NB_INTERP * dszdx2;                                                                                                                          \
-		ndtzdx2 = NB_INTERP * dtzdx2;                                                                                                                          \
 		unlit = (p0->r == TGL_FULL_BRIGHT && p0->g == TGL_FULL_BRIGHT && p0->b == TGL_FULL_BRIGHT  \
 		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
 		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
 		tgl_units = &gl_get_context()->tex_unit[0];                                                      \
+		{ static int lg = 0; if (lg < 60) { lg++;                                                                  \
+		  ESP_LOGI("dbg", "scan tex=%p u1m=0x%x u1t=%p u1x=%d w=%.1f | u2m=0x%x", texture,                                  \
+		    tgl_units[1].env_mode, tgl_units[1].texture,                                                              \
+		    tgl_units[1].texture ? tgl_units[1].texture->images[0].xsize : -1,                                         \
+		    tgl_units[1].env_color[0], tgl_units[2].env_mode); } }                                                  \
 		tgl_n_extra = 0;                                                                                  \
-		gen_active = 0;                                                                                   \
 		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
 			GLTextureUnit* _u = &tgl_units[_i];                                                             \
+			if (_u->env_mode == GL_ADD) tgl_dbg_addmode++;                                             \
 			if (_u->env_mode != GL_ADD || !_u->texture || !_u->texture->images[0].xsize) continue;          \
 			float _w = _u->env_color[0];                                                                   \
 			if (_w <= 0.0f) continue;                                                                      \
 			if (_w > 1.0f) _w = 1.0f;                                                                      \
 			tgl_extra[tgl_n_extra].data  = (const uint8_t*)_u->texture->images[0].pixmap;                  \
-			if (_u->gen_s_enabled || _u->gen_t_enabled) {                                                  \
-				tgl_extra[tgl_n_extra].use_gen = 1;                                                    \
-				tgl_extra[tgl_n_extra].s_off = 0;                                                      \
-				tgl_extra[tgl_n_extra].t_off = 0;                                                      \
-				gen_active = 1;                                                                        \
-			} else {                                                                                       \
-				tgl_extra[tgl_n_extra].use_gen = 0;                                                    \
-				tgl_extra[tgl_n_extra].s_off = (int)(_u->u_off * (1 << (1 + TGL_FEATURE_TEXTURE_POW2 + ZB_POINT_S_FRAC_BITS))); \
-				tgl_extra[tgl_n_extra].t_off = (int)(_u->v_off * (1 << ZB_POINT_T_FRAC_BITS));                  \
-			}                                                                                              \
-			tgl_extra[tgl_n_extra].w8   = (int)(_w * 256.0f + 0.5f);                                       \
-			if (tgl_extra[tgl_n_extra].w8 > 256) tgl_extra[tgl_n_extra].w8 = 256;                          \
-			tgl_n_extra++;                                                                                  \
-		}                                                                                                 \
-		multitex_active = (tgl_n_extra > 0);                                                              \
-		if (multitex_active) tgl_multitex_tris++;                                                        \
-	}
-#if TGL_FEATURE_LIT_TEXTURES == 1
-#define OR1OG1OB1DECL                                                                                                                                          \
-	register GLint or1, og1, ob1;                                                                                                                              \
-	or1 = r1;                                                                                                                                                  \
-	og1 = g1;                                                                                                                                                  \
-	ob1 = b1;
-#define OR1G1B1INCR                                                                                                                                            \
-	og1 += dgdx;                                                                                                                                               \
-	or1 += drdx;                                                                                                                                               \
-	ob1 += dbdx;
-#else
-#define OR1OG1OB1DECL /*A comment*/
-#define OR1G1B1INCR   /*Another comment*/
-#define or1 COLOR_MULT_MASK
-#define og1 COLOR_MULT_MASK
-#define ob1 COLOR_MULT_MASK
-#endif
-#if TGL_FEATURE_NO_DRAW_COLOR != 1
-#define PUT_PIXEL(_a)                                                                                                                                          \
-	{                                                                                                                                                          \
-		{                                                                                                                                                      \
-			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
-			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
-				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t));                                                                           \
-				if (zbdw)                                                                                                                                      \
-					pz[_a] = zz;                                                                                                                               \
-			}                                                                                                                                                  \
-		}                                                                                                                                                      \
-		z += dzdx;                                                                                                                                             \
-		s += dsdx;                                                                                                                                             \
-		t += dtdx;                                                                                                                                             \
-		if (gen_active) { s2 += ds2dx; t2 += dt2dx; }                                                                                                         \
-		OR1G1B1INCR                                                                                                                                            \
-	}
-#else
-#define PUT_PIXEL(_a)                                                                                                                                          \
-	{                                                                                                                                                          \
-		{                                                                                                                                                      \
-			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
-			PIXEL c = multitex_active ? tgl_multitex_sample_prepared(tgl_extra, tgl_n_extra, s, t, s2, t2, (const uint8_t*)texture) : TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
-			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
-				pp[_a] = unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
-				/*TGL_BLEND_FUNC(unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));*/                                                                                  \
-				if (zbdw)                                                                                                                                      \
-					pz[_a] = zz;                                                                                                                               \
-			}                                                                                                                                                  \
-		}                                                                                                                                                      \
-		z += dzdx;                                                                                                                                             \
-		s += dsdx;                                                                                                                                             \
-		t += dtdx;                                                                                                                                             \
-		if (gen_active) { s2 += ds2dx; t2 += dt2dx; }                                                                                                         \
-		OR1G1B1INCR                                                                                                                                            \
-	}
-#endif
-#define DRAW_LINE()                                                                                                                                            \
-	{ DRAW_LINE_TRI_TEXTURED() }
-#include "ztriangle.h"
-}
-
-/* Affine texture mapping with blend (delegates to NOBLEND since blend is
- * typically disabled for skybox use case) */
-void ZB_fillTriangleMappingAffine(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
-	ZB_fillTriangleMappingAffineNOBLEND(zb, p0, p1, p2);
-}
-
-void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
-	PIXEL* texture;
-	int unlit;   /* all 3 vertices full-bright → RGB_MIX is identity (and would overflow) */
-	GLTextureUnit* tgl_units;      /* hoisted context tex_unit array */
-	int multitex_active;           /* any unit 1+ is GL_ADD + texture + weight */
-	tgl_extra_tex_t tgl_extra[3];  /* precomputed extra-unit blend params */
-	int tgl_n_extra;
-
-	GLubyte zbdw = zb->depth_write;
-	GLubyte zbdt = zb->depth_test;
-	TGL_STIPPLEVARS
-#undef INTERP_Z
-#undef INTERP_RGB
-#undef INTERP_ST
-#undef INTERP_STZ
-#define INTERP_Z
-#define INTERP_ST
-#define INTERP_RGB
-
-#define DRAW_INIT()                                                                                                                                            \
-	{                                                                                                                                                          \
-		texture = zb->current_texture;                                                                                                                         \
-		unlit = (p0->r == TGL_FULL_BRIGHT && p0->g == TGL_FULL_BRIGHT && p0->b == TGL_FULL_BRIGHT  \
-		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
-		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
-		tgl_units = &gl_get_context()->tex_unit[0];                                                      \
-		tgl_n_extra = 0;                                                                                  \
-		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
-			GLTextureUnit* _u = &tgl_units[_i];                                                             \
-			if (_u->env_mode != GL_ADD || !_u->texture || !_u->texture->images[0].xsize) continue;          \
-			float _w = _u->env_color[0];                                                                   \
-			if (_w <= 0.0f) continue;                                                                      \
-			if (_w > 1.0f) _w = 1.0f;                                                                      \
-			tgl_extra[tgl_n_extra].data  = (const uint8_t*)_u->texture->images[0].pixmap;                  \
-			tgl_extra[tgl_n_extra].use_gen = 0;                                                            \
 			tgl_extra[tgl_n_extra].s_off = (int)(_u->u_off * (1 << (1 + TGL_FEATURE_TEXTURE_POW2 + ZB_POINT_S_FRAC_BITS))); \
 			tgl_extra[tgl_n_extra].t_off = (int)(_u->v_off * (1 << ZB_POINT_T_FRAC_BITS));                  \
 			tgl_extra[tgl_n_extra].w8   = (int)(_w * 256.0f + 0.5f);                                       \
@@ -762,7 +616,119 @@ void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferP
 	{                                                                                                                                                          \
 		{                                                                                                                                                      \
 			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
-			PIXEL c = multitex_active ? tgl_multitex_sample_prepared(tgl_extra, tgl_n_extra, s, t, 0, 0, (const uint8_t*)texture) : TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
+			PIXEL c = multitex_active ? tgl_multitex_sample_prepared(tgl_extra, tgl_n_extra, s, t, (const uint8_t*)texture) : TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
+			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
+				pp[_a] = unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
+				/*TGL_BLEND_FUNC(unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c), (pp[_a]));*/                                                                                  \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#endif
+#define DRAW_LINE()                                                                                                                                            \
+	{ DRAW_LINE_TRI_TEXTURED() }
+#include "ztriangle.h"
+}
+
+/* Affine texture mapping with blend (delegates to NOBLEND since blend is
+ * typically disabled for skybox use case) */
+void ZB_fillTriangleMappingAffine(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
+	ZB_fillTriangleMappingAffineNOBLEND(zb, p0, p1, p2);
+}
+
+void ZB_fillTriangleMappingAffineNOBLEND(ZBuffer* zb, ZBufferPoint* p0, ZBufferPoint* p1, ZBufferPoint* p2) {
+	PIXEL* texture;
+	int unlit;   /* all 3 vertices full-bright → RGB_MIX is identity (and would overflow) */
+	GLTextureUnit* tgl_units;      /* hoisted context tex_unit array */
+	int multitex_active;           /* any unit 1+ is GL_ADD + texture + weight */
+	tgl_extra_tex_t tgl_extra[3];  /* precomputed extra-unit blend params */
+	int tgl_n_extra;
+
+	GLubyte zbdw = zb->depth_write;
+	GLubyte zbdt = zb->depth_test;
+	TGL_STIPPLEVARS
+#undef INTERP_Z
+#undef INTERP_RGB
+#undef INTERP_ST
+#undef INTERP_STZ
+#define INTERP_Z
+#define INTERP_ST
+#define INTERP_RGB
+
+#define DRAW_INIT()                                                                                                                                            \
+	{                                                                                                                                                          \
+		texture = zb->current_texture;                                                                                                                         \
+		unlit = (p0->r == TGL_FULL_BRIGHT && p0->g == TGL_FULL_BRIGHT && p0->b == TGL_FULL_BRIGHT  \
+		      && p1->r == TGL_FULL_BRIGHT && p1->g == TGL_FULL_BRIGHT && p1->b == TGL_FULL_BRIGHT  \
+		      && p2->r == TGL_FULL_BRIGHT && p2->g == TGL_FULL_BRIGHT && p2->b == TGL_FULL_BRIGHT); \
+		tgl_units = &gl_get_context()->tex_unit[0];                                                      \
+		{ static int lg = 0; if (lg < 60) { lg++;                                                                  \
+		  ESP_LOGI("dbg", "scan tex=%p u1m=0x%x u1t=%p u1x=%d w=%.1f | u2m=0x%x", texture,                                  \
+		    tgl_units[1].env_mode, tgl_units[1].texture,                                                              \
+		    tgl_units[1].texture ? tgl_units[1].texture->images[0].xsize : -1,                                         \
+		    tgl_units[1].env_color[0], tgl_units[2].env_mode); } }                                                  \
+		tgl_n_extra = 0;                                                                                  \
+		for (int _i = 1; _i < MAX_TEXTURE_UNITS; _i++) {                                                  \
+			GLTextureUnit* _u = &tgl_units[_i];                                                             \
+			if (_u->env_mode == GL_ADD) tgl_dbg_addmode++;                                             \
+			if (_u->env_mode != GL_ADD || !_u->texture || !_u->texture->images[0].xsize) continue;          \
+			float _w = _u->env_color[0];                                                                   \
+			if (_w <= 0.0f) continue;                                                                      \
+			if (_w > 1.0f) _w = 1.0f;                                                                      \
+			tgl_extra[tgl_n_extra].data  = (const uint8_t*)_u->texture->images[0].pixmap;                  \
+			tgl_extra[tgl_n_extra].s_off = (int)(_u->u_off * (1 << (1 + TGL_FEATURE_TEXTURE_POW2 + ZB_POINT_S_FRAC_BITS))); \
+			tgl_extra[tgl_n_extra].t_off = (int)(_u->v_off * (1 << ZB_POINT_T_FRAC_BITS));                  \
+			tgl_extra[tgl_n_extra].w8   = (int)(_w * 256.0f + 0.5f);                                       \
+			if (tgl_extra[tgl_n_extra].w8 > 256) tgl_extra[tgl_n_extra].w8 = 256;                          \
+			tgl_n_extra++;                                                                                  \
+		}                                                                                                 \
+		multitex_active = (tgl_n_extra > 0);                                                              \
+		if (multitex_active) tgl_multitex_tris++;                                                        \
+	}
+#if TGL_FEATURE_LIT_TEXTURES == 1
+#define OR1OG1OB1DECL                                                                                                                                          \
+	register GLint or1, og1, ob1;                                                                                                                              \
+	or1 = r1;                                                                                                                                                  \
+	og1 = g1;                                                                                                                                                  \
+	ob1 = b1;
+#define OR1G1B1INCR                                                                                                                                            \
+	og1 += dgdx;                                                                                                                                               \
+	or1 += drdx;                                                                                                                                               \
+	ob1 += dbdx;
+#else
+#define OR1OG1OB1DECL /*A comment*/
+#define OR1G1B1INCR   /*Another comment*/
+#define or1 COLOR_MULT_MASK
+#define og1 COLOR_MULT_MASK
+#define ob1 COLOR_MULT_MASK
+#endif
+#if TGL_FEATURE_NO_DRAW_COLOR != 1
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			if (ZCMPSIMP(zz, pz[_a], _a, 0)) {                                                                                                                 \
+				pp[_a] = RGB_MIX_FUNC(or1, og1, ob1, TEXTURE_SAMPLE(texture, s, t));                                                                           \
+				if (zbdw)                                                                                                                                      \
+					pz[_a] = zz;                                                                                                                               \
+			}                                                                                                                                                  \
+		}                                                                                                                                                      \
+		z += dzdx;                                                                                                                                             \
+		s += dsdx;                                                                                                                                             \
+		t += dtdx;                                                                                                                                             \
+		OR1G1B1INCR                                                                                                                                            \
+	}
+#else
+#define PUT_PIXEL(_a)                                                                                                                                          \
+	{                                                                                                                                                          \
+		{                                                                                                                                                      \
+			register GLuint zz = z >> ZB_POINT_Z_FRAC_BITS;                                                                                                    \
+			PIXEL c = multitex_active ? tgl_multitex_sample_prepared(tgl_extra, tgl_n_extra, s, t, (const uint8_t*)texture) : TEXTURE_SAMPLE(texture, s, t);                                                                                                           \
 			if (ZCMP(zz, pz[_a], _a, c)) {                                                                                                                     \
 				pp[_a] = unlit ? c : RGB_MIX_FUNC(or1, og1, ob1, c);                                                                                                       \
 				if (zbdw)                                                                                                                                      \

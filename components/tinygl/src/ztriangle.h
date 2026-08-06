@@ -51,11 +51,6 @@ Things to keep in mind:
 	GLfloat tz1, dtzdx, dtzdy, dtzdl_min, dtzdl_max;
 	GLfloat fdzdx, fndzdx, ndszdx, ndtzdx;
 #endif
-#ifdef INTERP_STZ2
-	GLfloat sz1_2, dszdx2, dszdy2, dszdl_min2, dszdl_max2;
-	GLfloat tz1_2, dtzdx2, dtzdy2, dtzdl_min2, dtzdl_max2;
-	GLfloat ndszdx2, ndtzdx2;
-#endif
 
 	/* we sort the vertex with increasing y */
 	if (p1->y < p0->y) {
@@ -168,33 +163,7 @@ Things to keep in mind:
 			dtzdy = (fdx1 * d2 - fdx2 * d1);
 		}
 #endif
-#ifdef INTERP_STZ2
-		{
-			GLfloat zedzed;
-			zedzed = (GLfloat)p0->z;
-			p0->sz2 = (GLfloat)p0->s2 * zedzed;
-			p0->tz2 = (GLfloat)p0->t2 * zedzed;
-			zedzed = (GLfloat)p1->z;
-			p1->sz2 = (GLfloat)p1->s2 * zedzed;
-			p1->tz2 = (GLfloat)p1->t2 * zedzed;
-			zedzed = (GLfloat)p2->z;
-			p2->sz2 = (GLfloat)p2->s2 * zedzed;
-			p2->tz2 = (GLfloat)p2->t2 * zedzed;
-		}
-		{
-			d1 = p1->sz2 - p0->sz2;
-			d2 = p2->sz2 - p0->sz2;
-			dszdx2 = (fdy2 * d1 - fdy1 * d2);
-			dszdy2 = (fdx1 * d2 - fdx2 * d1);
-		}
-		{
-			d1 = p1->tz2 - p0->tz2;
-			d2 = p2->tz2 - p0->tz2;
-			dtzdx2 = (fdy2 * d1 - fdy1 * d2);
-			dtzdy2 = (fdx1 * d2 - fdx2 * d1);
-		}
-#endif
-	}
+	} 
 	/* screen coordinates */
 
 	pp1 = (PIXEL*)(zb->pbuf) + zb->xsize * p0->y; 
@@ -296,14 +265,6 @@ Things to keep in mind:
 				tz1 = l1->tz;
 				dtzdl_min = (dtzdy + dtzdx * dxdy_min);
 				dtzdl_max = dtzdl_min + dtzdx;
-#endif
-#ifdef INTERP_STZ2
-				sz1_2 = l1->sz2;
-				dszdl_min2 = (dszdy2 + dszdx2 * dxdy_min);
-				dszdl_max2 = dszdl_min2 + dszdx2;
-				tz1_2 = l1->tz2;
-				dtzdl_min2 = (dtzdy2 + dtzdx2 * dxdy_min);
-				dtzdl_max2 = dtzdl_min2 + dtzdx2;
 #endif
 			}
 			/* compute values for the right edge */
@@ -409,10 +370,6 @@ Things to keep in mind:
 				sz1 += dszdl_max;
 				tz1 += dtzdl_max;
 #endif
-#ifdef INTERP_STZ2
-				sz1_2 += dszdl_max2;
-				tz1_2 += dtzdl_max2;
-#endif
 			} else {
 				x1 += dxdy_min;
 #ifdef INTERP_Z
@@ -430,10 +387,6 @@ Things to keep in mind:
 #ifdef INTERP_STZ
 				sz1 += dszdl_min;
 				tz1 += dtzdl_min;
-#endif
-#ifdef INTERP_STZ2
-				sz1_2 += dszdl_min2;
-				tz1_2 += dtzdl_min2;
 #endif
 			}
 
@@ -455,7 +408,6 @@ Things to keep in mind:
 #undef INTERP_RGB
 #undef INTERP_ST
 #undef INTERP_STZ
-#undef INTERP_STZ2
 
 #undef DRAW_INIT
 #undef DRAW_LINE

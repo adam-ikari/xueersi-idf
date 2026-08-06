@@ -363,11 +363,7 @@ void glGetIntegerv(GLint pname, GLint* params) {
 	case GL_UNPACK_ROW_LENGTH:
 	case GL_UNPACK_LSB_FIRST:
 	case GL_TEXTURE_GEN_T:
-		params[0] = c->tex_unit[c->active_texture_unit].gen_t_enabled;
-		break;
 	case GL_TEXTURE_GEN_S:
-		params[0] = c->tex_unit[c->active_texture_unit].gen_s_enabled;
-		break;
 	case GL_TEXTURE_GEN_R:
 	case GL_TEXTURE_GEN_Q:
 
