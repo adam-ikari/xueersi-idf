@@ -57,6 +57,7 @@ enum {
     GLCMD_MATERIAL_F,       // u32 mode, u32 type, f32 param
     GLCMD_LIGHT_FV,         // u32 light, u32 type, f32[4] params
     GLCMD_LIGHT_MODEL_I,    // u32 pname, u32 param
+    GLCMD_LIGHT_MODEL_FV,   // u32 pname, f32[4] params
     GLCMD_COLOR_MATERIAL,   // u32 mode, u32 type
 
     /* ─ New: Transform / View ─ */

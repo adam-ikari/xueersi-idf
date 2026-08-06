@@ -45,6 +45,7 @@ IMPORT(void, glMaterialfv, int mode, int type, float v0, float v1, float v2, flo
 IMPORT(void, glMaterialf,  int mode, int type, float v);
 IMPORT(void, glLightfv,    int light, int type, float v0, float v1, float v2, float v3);
 IMPORT(void, glLightModeli, int pname, int param);
+IMPORT(void, glLightModelfv, int pname, float v0, float v1, float v2, float v3);
 IMPORT(void, glColorMaterial, int mode, int type);
 
 /* ── New: Transform / View ── */
@@ -90,6 +91,7 @@ enum {
     GL_AMBIENT_AND_DIFFUSE = 0x1602,
     GL_LIGHT_MODEL_LOCAL_VIEWER = 0x0B51,
     GL_LIGHT_MODEL_TWO_SIDE     = 0x0B52,
+    GL_LIGHT_MODEL_AMBIENT      = 0x0B53,
     GL_COLOR_MATERIAL     = 0x0B57,
     GL_FRONT_AND_BACK     = 0x0408,
 
@@ -262,8 +264,16 @@ static void draw_cube(float hs, const material_t *mat)
      * cube is visible but not washed out; specular+reflection provide the
      * metallic pop. */
     if (mat->metal) {
-        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,  0.08f, 0.08f, 0.08f, 1.0f);
-        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,  0.15f, 0.15f, 0.15f, 1.0f);
+        /* Metal shares the SAME global ambient as every other material
+         * (set via GL_LIGHT_MODEL_AMBIENT in game_init) — we do NOT raise
+         * the metal ambient to compensate for darkness. Metals read as
+         * mirror-like through a bright specular lobe + the sphere-map
+         * reflection overlay, not by crushing diffuse to zero. Keep
+         * diffuse moderate (below brick's 0.8 so the highlight isn't
+         * washed out) and ambient near brick so the cube is always lit
+         * by the shared global ambient. */
+        glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,  0.3f, 0.3f, 0.3f, 1.0f);
+        glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,  0.4f, 0.4f, 0.4f, 1.0f);
     } else {
         glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,  0.8f, 0.8f, 0.8f, 1.0f);
         glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,  0.3f, 0.3f, 0.3f, 1.0f);
@@ -340,9 +350,17 @@ extern "C" void game_init(void)
      * the local viewer makes H track each vertex so highlights become visible. */
     glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, 1);
 
-    /* Default material: low diffuse (mirror-like), moderate ambient */
-    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,   0.08f, 0.08f, 0.08f, 1.0f);
-    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,   0.15f, 0.15f, 0.15f, 1.0f);
+    /* Global ambient light model — the SAME for every material. This is the
+     * uniform environment illumination all cubes (metal, brick, sand) share;
+     * per-material differences come only from each material's ambient/diffuse
+     * reflectance, not from inflating one material's ambient to compensate.
+     * Default is (0.2,0.2,0.2); raised so faces away from the light stay
+     * visible instead of going black. */
+    glLightModelfv(GL_LIGHT_MODEL_AMBIENT, 0.5f, 0.5f, 0.5f, 1.0f);
+
+    /* Default material (overwritten per-cube in draw_cube). */
+    glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,   0.3f, 0.3f, 0.3f, 1.0f);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,   0.4f, 0.4f, 0.4f, 1.0f);
     glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR,  0.7f, 0.7f, 0.7f, 1.0f);
     glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 20.0f);
 

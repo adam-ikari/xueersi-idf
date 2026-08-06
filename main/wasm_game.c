@@ -93,6 +93,10 @@ static void host_glLightfv(wasm_exec_env_t env, int32_t light, int32_t type,
   glcmd_u32((uint32_t)type); glcmd_f32(v0); glcmd_f32(v1); glcmd_f32(v2); glcmd_f32(v3); }
 static void host_glLightModeli(wasm_exec_env_t env, int32_t pname, int32_t param)
 { GLW_EMPTY(env); glcmd_u8(GLCMD_LIGHT_MODEL_I); glcmd_u32((uint32_t)pname); glcmd_u32((uint32_t)param); }
+static void host_glLightModelfv(wasm_exec_env_t env, int32_t pname,
+                                float v0, float v1, float v2, float v3)
+{ GLW_EMPTY(env); glcmd_u8(GLCMD_LIGHT_MODEL_FV); glcmd_u32((uint32_t)pname);
+  glcmd_f32(v0); glcmd_f32(v1); glcmd_f32(v2); glcmd_f32(v3); }
 static void host_glColorMaterial(wasm_exec_env_t env, int32_t mode, int32_t type)
 { GLW_EMPTY(env); glcmd_u8(GLCMD_COLOR_MATERIAL); glcmd_u32((uint32_t)mode); glcmd_u32((uint32_t)type); }
 
@@ -191,6 +195,7 @@ static NativeSymbol gl_natives[] = {
     { "glMaterialf",     (void *)host_glMaterialf,     "(iif)",    NULL },
     { "glLightfv",       (void *)host_glLightfv,       "(iiffff)", NULL },
     { "glLightModeli",   (void *)host_glLightModeli,   "(ii)",     NULL },
+    { "glLightModelfv",  (void *)host_glLightModelfv,  "(iffff)",  NULL },
     { "glColorMaterial", (void *)host_glColorMaterial, "(ii)",     NULL },
 
     /* ── Transform / View ── */

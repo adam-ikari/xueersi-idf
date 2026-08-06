@@ -222,6 +222,16 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
             glLightModeli(pname, param);
             break;
         }
+        case GLCMD_LIGHT_MODEL_FV: {
+            GLint pname = (GLint)read_u32(&p);
+            GLfloat params[4];
+            params[0] = read_f32(&p);
+            params[1] = read_f32(&p);
+            params[2] = read_f32(&p);
+            params[3] = read_f32(&p);
+            glLightModelfv(pname, params);
+            break;
+        }
         case GLCMD_COLOR_MATERIAL: {
             GLint mode = (GLint)read_u32(&p);
             GLint type = (GLint)read_u32(&p);
