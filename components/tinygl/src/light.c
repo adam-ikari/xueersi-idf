@@ -3,10 +3,10 @@
 #include "esp_log.h"
 
 static const char *TGL_TAG = "tgl_spec";
-/* Diagnostic: print the specular computation chain for ~1 vertex per 256
- * so we can see on the serial monitor whether the path runs and what the
- * numbers are. REMOVE once the root cause is found. */
-static int s_spec_log_counter = 0;
+/* Scene-dump gate: print EVERY lit vertex's specular chain for the first
+ * ~150 vertices after boot, then go silent. Set back to 0 to re-arm.
+ * REMOVE once the root cause is found. */
+static int s_spec_dump_left = 150;
 
 void glopMaterial(GLParam* p) {
 	GLContext* c = gl_get_context();
@@ -352,16 +352,8 @@ void gl_shade_vertex(GLVertex* v) {
 				dot_spec = n.X * s.X + n.Y * s.Y + n.Z * s.Z;
 				if (twoside && dot_spec < 0)
 					dot_spec = -dot_spec;
-				if (s_spec_log_counter++ % 256 == 0) {
-					ESP_LOGI(TGL_TAG, "SPEC zEnable=%d local=%d | n=(%.3f,%.3f,%.3f) d=(%.3f,%.3f,%.3f) s=(%.3f,%.3f,%.3f)",
-						c->zEnableSpecular, c->local_light_model,
-						n.X, n.Y, n.Z, d.X, d.Y, d.Z, s.X, s.Y, s.Z);
-					ESP_LOGI(TGL_TAG, "     dot=%.3f shin=%.1f mSpec=(%.2f,%.2f,%.2f) lSpec=(%.2f,%.2f,%.2f) ec=(%.2f,%.2f,%.2f)",
-						dot_spec, m->shininess,
-						m->specular.v[0], m->specular.v[1], m->specular.v[2],
-						l->specular.v[0], l->specular.v[1], l->specular.v[2],
-						v->ec.X, v->ec.Y, v->ec.Z);
-				}
+				GLfloat dot_raw = dot_spec;
+				GLfloat smag = (GLfloat)sqrt((double)(s.X * s.X + s.Y * s.Y + s.Z * s.Z));
 				if (dot_spec > 0) {
 #if TGL_FEATURE_SPECULAR_BUFFERS == 1
 					GLSpecBuf* specbuf;
@@ -389,6 +381,7 @@ void gl_shade_vertex(GLVertex* v) {
 #include "error_check.h"
 #endif
 #else
+					GLfloat dot_norm = dot_spec;
 					dot_spec = pow(dot_spec, m->shininess);
 #endif
 
@@ -398,10 +391,37 @@ void gl_shade_vertex(GLVertex* v) {
 						idx = SPECULAR_BUFFER_SIZE; /* NOTE by GEK: this is poorly written, it's actually 1 larger.*/
 					dot_spec = specbuf->buf[idx];
 #endif
+					if (s_spec_dump_left > 0) {
+						s_spec_dump_left--;
+#if TGL_FEATURE_SPECULAR_BUFFERS == 0
+						ESP_LOGI(TGL_TAG,
+							"SPEC n=(%.3f,%.3f,%.3f) d=(%.3f,%.3f,%.3f) s=(%.3f,%.3f,%.3f) "
+							"|s|=%.3f dotRaw=%.3f dotNorm=%.3f shin=%.0f pow=%.4f pe=(%.2f,%.2f,%.2f)",
+							n.X, n.Y, n.Z, d.X, d.Y, d.Z, s.X, s.Y, s.Z,
+							smag, dot_raw, dot_norm, m->shininess, dot_spec,
+							v->ec.X, v->ec.Y, v->ec.Z);
+#else
+						ESP_LOGI(TGL_TAG,
+							"SPEC n=(%.3f,%.3f,%.3f) d=(%.3f,%.3f,%.3f) s=(%.3f,%.3f,%.3f) "
+							"|s|=%.3f dotRaw=%.3f shin=%.0f pow=%.4f pe=(%.2f,%.2f,%.2f)",
+							n.X, n.Y, n.Z, d.X, d.Y, d.Z, s.X, s.Y, s.Z,
+							smag, dot_raw, m->shininess, dot_spec,
+							v->ec.X, v->ec.Y, v->ec.Z);
+#endif
+					}
 					lR += dot_spec * l->specular.v[0] * m->specular.v[0];
 					lG += dot_spec * l->specular.v[1] * m->specular.v[1];
 					lB += dot_spec * l->specular.v[2] * m->specular.v[2];
-				} 
+				} else {
+					if (s_spec_dump_left > 0) {
+						s_spec_dump_left--;
+						ESP_LOGI(TGL_TAG,
+							"SPEC n=(%.3f,%.3f,%.3f) d=(%.3f,%.3f,%.3f) s=(%.3f,%.3f,%.3f) "
+							"|s|=%.3f dotRaw=%.3f (<=0, no spec) pe=(%.2f,%.2f,%.2f)",
+							n.X, n.Y, n.Z, d.X, d.Y, d.Z, s.X, s.Y, s.Z,
+							smag, dot_raw, v->ec.X, v->ec.Y, v->ec.Z);
+					}
+				}
 			}	 
 		}		  
 
@@ -414,7 +434,7 @@ void gl_shade_vertex(GLVertex* v) {
 	v->color.v[1] = clampf(G, 0, 1);
 	v->color.v[2] = clampf(B, 0, 1);
 	v->color.v[3] = A;
-	if (s_spec_log_counter % 256 < 3) {
+	if (s_spec_dump_left > 0) {
 		ESP_LOGI(TGL_TAG, "OUT color=(%.3f,%.3f,%.3f) mDiff=(%.2f,%.2f,%.2f) mAmb=(%.2f,%.2f,%.2f) ambModel=(%.2f,%.2f,%.2f)",
 			v->color.v[0], v->color.v[1], v->color.v[2],
 			m->diffuse.v[0], m->diffuse.v[1], m->diffuse.v[2],

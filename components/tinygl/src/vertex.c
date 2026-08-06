@@ -1,5 +1,11 @@
 #include "zgl.h"
 #include <string.h>
+#include "esp_log.h"
+static const char *TGL_REF_TAG = "tgl_reflect";
+/* Scene-dump gate: print EVERY reflective vertex's coords for the first
+ * ~150 vertices after boot (≈6 cube frames), then go silent. Set back to 0
+ * to re-arm. Gives the complete scene picture without flooding the log. */
+static int s_reflect_dump_left = 150;
 void glopNormal(GLParam* p) {
 	V3 v;
 	GLContext* c = gl_get_context();
@@ -189,12 +195,22 @@ static void gl_transform_to_viewport_vertex_c(GLVertex* v) {
 				sf = 0.5f;            /* head-on: silhouette centre */
 				tf = 0.5f;
 			}
+			v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
+			v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
+			if (s_reflect_dump_left > 0) {
+				s_reflect_dump_left--;
+				ESP_LOGI(TGL_REF_TAG,
+					"REFL n=(%.3f,%.3f,%.3f) pe=(%.2f,%.2f,%.2f) u=(%.3f,%.3f,%.3f) "
+					"ndotu=%.3f R=(%.3f,%.3f,%.3f) m=%.3f s2=%.3f t2=%.3f",
+					n.X, n.Y, n.Z, v->ec.X, v->ec.Y, v->ec.Z,
+					ux, uy, uz, d, rx, ry, rz, m, sf, tf);
+			}
 		} else {
 			sf = 0.5f;                /* vertex at eye: undefined */
 			tf = 0.5f;
+			v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
+			v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
 		}
-		v->zp.s2 = (GLint)(sf * (ZB_POINT_S_MAX - ZB_POINT_S_MIN) + ZB_POINT_S_MIN);
-		v->zp.t2 = (GLint)(tf * (ZB_POINT_T_MAX - ZB_POINT_T_MIN) + ZB_POINT_T_MIN);
 	}
 }
 
