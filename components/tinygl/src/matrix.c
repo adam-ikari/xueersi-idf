@@ -168,8 +168,9 @@ void glopRotate(GLParam* p) {
 		u[0] *= len;
 		u[1] *= len;
 		u[2] *= len;
-		/* store cos and sin values (LUT — replaces libm sin()/cos()) */
-		tgl_sincos(angle, &sint, &cost);
+		/* store cos and sin values */
+		cost = cos(angle);
+		sint = sin(angle);
 
 		/* fill in the values */
 		m.m[3][0] = m.m[3][1] = m.m[3][2] = m.m[0][3] = m.m[1][3] = m.m[2][3] = 0.0f;

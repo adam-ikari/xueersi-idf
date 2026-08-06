@@ -47,10 +47,6 @@ void gl_M4_MulLeft(M4* c, M4* a);
 void gl_M4_Transpose(M4* a, M4* b);
 void gl_M4_Rotate(M4* c, GLfloat t, GLint u);
 
-/* sin/cos lookup (LUT) -- replaces libm sin/cos in the glRotatef hot path.
- * Returns sin(t) and cos(t) for any real t (radians) via sp and cp. */
-void tgl_sincos(GLfloat t, GLfloat* sp, GLfloat* cp);
-
 
 
 V3 gl_V3_New(GLfloat x, GLfloat y, GLfloat z);

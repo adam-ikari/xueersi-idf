@@ -324,74 +324,77 @@ def _reflect_color(ry: float,
 
 
 def gen_reflect(width: int, height: int) -> bytearray:
-    """Environment reflection map: spherical projection of sky + desert ground.
+    """Environment reflection map for the cheap normal-driven sphere-map.
 
-    UV mapped as a sphere-map: the forward map in vertex.c is
-        u=normalize(pe), R=u-2(n·u)n, m=2·sqrt(Rx²+Ry²+(Rz+1)²),
-        s=Rx/m+0.5, t=Ry/m+0.5
-    so each face's reflected ray R indexes this texture. We invert that map
-    per-texel to recover R.y (sky vs ground) and colour by it: faces whose
-    reflection points up read sky, down read ground.
+    The kernel (vertex.c) no longer uses the real sphere-projection math.
+    It uses a cheap offset-scroll approximation driven by the eye-space
+    normal:  s2 = 0.5 + 0.5·n.X,  t2 = 0.5 + 0.5·n.Y  (clamped [0,1]).
+    So the texture's (s,t) layout MUST match that mapping, not the old
+    valid-disc sphere-map layout:
 
-    KEY: the whole texture is coloured by R.y, not just the central disc.
-    The sphere-map valid disc (r2<0.25) covers only reflections whose R.z≈+1
-    (ray pointing at the viewer). Most faces on a rotating cube have R.z
-    small or negative (reflection pointing away/sideways) → their (s,t)
-    land OUTSIDE the disc. Previously those texels were a flat horizon blue,
-    so the reflection showed NO sky/ground variation — just uniform blue
-    added onto the metal (the user's "28% sky blue overlaid on metal"
-    complaint). Now the out-of-disc region is also coloured by R.y: the
-    disc boundary r2=0.25 is R.z=0 (horizon), and beyond it R.z<0 with the
-    R.y sign still carried by v=2t-1, so we use ry=v (clamped) there. This
-    makes every face's reflection resolve to sky-or-ground by orientation.
+      t axis (vertical) is the PRIMARY axis — it tracks n.Y:
+        t=1 (top row,    n.Y=+1, normal pointing up)    -> SKY (zenith)
+        t=0 (bottom row, n.Y=-1, normal pointing down)  -> GROUND (nadir)
+        t=0.5 (middle,   n.Y= 0)                        -> HORIZON
+      s axis (horizontal) tracks n.X — gives visible sideways scroll as
+      the cube yaws. A gentle horizontal hue gradient (sky bluer on one
+      side, warmer on the other; ground sandier vs rockier) makes the
+      Y-rotation reflection walk readable, without breaking the sky/ground
+      split that t alone determines.
 
-    The texture is radially symmetric around the center, matching the
-    Blinn-Phong specular lobe so that the combined effect (base metal +
-    reflect ADD + specular ADD) reads as polished metal."""
-    import math
+    This is the "fake" reflection the user asked for: an OpenGL 1.x
+    sphere-map API surface (glTexGeni GL_SPHERE_MAP + GL_TEXTURE_GEN_S/T)
+    with the heavy math replaced by a 2-mul normal-driven offset, and a
+    texture painted to match. Zero sqrt, zero reflection vector."""
     buf = bytearray(width * height * 3)
 
-    # Sky colors — high contrast for mirror-like reflection
-    sky_top = (80, 140, 220)     # bright deep blue (zenith)
-    sky_hor = (180, 210, 240)    # bright horizon blue-white
-    ground  = (160, 120, 60)     # deep desert sand (nadir)
+    # Sky / ground palette — high contrast for a mirror-like read.
+    sky_top = (70, 130, 215)     # zenith deep blue
+    sky_hor = (185, 210, 235)    # horizon blue-white
+    ground  = (150, 115, 55)     # desert sand (nadir)
+    ground_hor = (170, 140, 80)  # distant ground near horizon (warmer)
 
     for y in range(height):
         for x in range(width):
-            # Standard sphere-map INVERSE: given texel (s,t), recover the unit
-            # reflection vector R, then colour by R.y (sky vs ground).
-            # Forward (vertex.c): m=2·sqrt(Rx²+Ry²+(Rz+1)²), s=Rx/m+0.5,
-            #   t=Ry/m+0.5. Inverting (u=2s-1, v=2t-1, r2=u²+v²):
-            #   R.z = 1-2·r2,  R.x = u·2·sqrt(1-r2),  R.y = v·2·sqrt(1-r2).
-            # OpenGL t=0 is bottom (ground), t=1 is top (sky). In image space
-            # y=0 is the top row, so t must flip: t=1 at y=0 (sky), t=0 at
-            # y=height (ground).
+            # Texel -> (s,t). Image y=0 is the TOP row -> t=1 (sky).
             s = (x + 0.5) / width
             t = 1.0 - (y + 0.5) / height
-            u = 2.0 * s - 1.0
-            v = 2.0 * t - 1.0
-            r2 = u * u + v * v
+            # ry in [-1,1]: +1=sky, -1=ground. This IS n.Y under the cheap map.
+            ry = 2.0 * t - 1.0
+            # Horizontal variation factor in [-1,1]: adds a sideways hue
+            # shift so yaw rotation reads as a walking reflection. Small
+            # amplitude — the sky/ground split stays governed by ry.
+            hx = 2.0 * s - 1.0
 
-            if r2 < 0.2501:
-                # Inside the valid disc — exact R.y from the inverse map.
-                f = 4.0 * math.sqrt(1.0 - 4.0 * r2)
-                ry = v * f  # R.y in [-1,1]: +1=zenith(sky), -1=nadir(ground)
+            if ry >= 0.0:
+                # Sky half: horizon (ry=0) -> zenith (ry=1). Shift the blue
+                # toward a warmer/orangier horizon on one side (sun glow) so
+                # horizontal motion has visible colour change.
+                blend = ry
+                r = sky_hor[0] + (sky_top[0] - sky_hor[0]) * blend
+                g = sky_hor[1] + (sky_top[1] - sky_hor[1]) * blend
+                b = sky_hor[2] + (sky_top[2] - sky_hor[2]) * blend
+                # Sun-glow warmth on the +s side, cooler on -s side.
+                glow = 0.18 * (1.0 - ry) * max(0.0, hx)
+                r += 35.0 * glow
+                g += 18.0 * glow
+                b -= 10.0 * glow
             else:
-                # Outside the valid disc (r2 >= 1/4): the exact inverse goes
-                # imaginary (R.z<0, ray pointing away from viewer). But R.y's
-                # sign and rough magnitude are still carried by v=2t-1, and
-                # the disc boundary is the horizon (R.y=0). Use ry=v clamped
-                # to [-1,1] so this region still resolves sky-vs-ground by
-                # vertical reflection direction instead of a flat blue fill.
-                # This is the fix for "reflection should compute ground vs
-                # sky, not overlay uniform sky blue".
-                ry = max(-1.0, min(1.0, v))
-            r, g, b = _reflect_color(ry, sky_top, sky_hor, ground)
+                # Ground half: horizon (ry=0) -> nadir (ry=-1). Sandier near
+                # horizon, rockier/darker at nadir; a slight sideways shift
+                # so yaw motion reads.
+                blend = -ry
+                r = ground_hor[0] + (ground[0] - ground_hor[0]) * blend
+                g = ground_hor[1] + (ground[1] - ground_hor[1]) * blend
+                b = ground_hor[2] + (ground[2] - ground_hor[2]) * blend
+                r += 10.0 * hx
+                g += 6.0 * hx
+                b += 2.0 * hx
 
             i = (y * width + x) * 3
-            buf[i] = max(0, min(255, r))
-            buf[i+1] = max(0, min(255, g))
-            buf[i+2] = max(0, min(255, b))
+            buf[i]   = max(0, min(255, int(r)))
+            buf[i+1] = max(0, min(255, int(g)))
+            buf[i+2] = max(0, min(255, int(b)))
     return buf
 
 

@@ -339,55 +339,30 @@ extern "C" void game_init(void)
     glEnable(GL_CULL_FACE);
     glEnable(GL_LIGHTING);
     glEnable(GL_LIGHT0);
-    glEnable(GL_LIGHT1);
-    glEnable(GL_LIGHT2);
-    glEnable(GL_LIGHT3);
 
-    /* Four directional lights at the corners of a forward hemisphere cure
-     * the geometric degeneracy that killed Blinn-Phong specular on a
-     * rotating cube.
+    /* Single directional light — the foundation of the material look.
      *
-     * The degeneracy: Blinn-Phong's half-vector H = normalize(L + V) (V =
-     * vertex→eye). With V≈+Z (camera looks down −Z), a single +Z light puts
-     * H≈+Z too. The cube's visible faces have eye-space normals near +Z only
-     * at the instant a face turns head-on; for most of the rotation the
-     * normal sweeps away from H and pow(n·H, shininess) drops to 0 — so the
-     * highlight blinks once per face and is invisible the rest of the time.
-     * Device tgl_spec logs confirmed normalised dot_spec stayed 0.75-0.85
-     * → pow(·,20) ≈ 0 across almost all visible vertices.
+     * The goal is NOT a tight Blinn-Phong specular lobe (metal rarely shows
+     * a sharp hotspot; and under the 25° camera tilt the n·H geometry makes
+     * one invisible anyway). The goal is the per-face diffuse brightening
+     * that reads as "metal lit by the environment": a face whose normal
+     * points toward the light lights up UNIFORMLY (same normal across the
+     * whole face → same dot product → whole face one brightness), and as
+     * the cube rotates each face brightens then dims in turn. That uniform
+     * per-face brightening is the dominant metallic cue; the sphere-map
+     * reflection overlay (unit1) supplies the environment wander on top.
      *
-     * Four lights at the hemisphere corners mean H tilts in four different
-     * directions; as a face rotates, its normal sweeps past at least one of
-     * the four H vectors every ~10°, so a highlight is ALWAYS visible on
-     * some face. Python sim of the exact on-device geometry (25° camera
-     * tilt, cube yaw s_angle + pitch s_angle*0.6, local viewer) confirms:
-     * 4-corner @ shininess 12 → visible specular (pow>0.05) at 36/36 yaw
-     * angles, 44% of visible faces; shininess 16/20/30 drop to 32/29/26 of
-     * 36 — so 12 is the floor for full-rotation coverage. The wandering
-     * highlight across faces as the cube turns reads as metallic.
-     *
-     * Per-light diffuse is kept LOW (0.25) because the lighting loop SUMS
-     * all enabled lights: a face lit by 2-3 corner lights would otherwise
-     * blow out to white and bury the specular. Specular stays at 1.0 each
-     * (summed, clamped) so the highlight stays bright. All directional
-     * (w=0); local viewer makes H track each vertex. */
-    const float LP[4][3] = { /* x, y, z — normalised internally by TinyGL */
-        { 0.7f,  0.3f, 0.6f},
-        {-0.7f, -0.3f, 0.6f},
-        { 0.3f, -0.7f, 0.6f},
-        {-0.3f,  0.7f, 0.6f},
-    };
-    const int LIGHTS[4] = { GL_LIGHT0, GL_LIGHT1, GL_LIGHT2, GL_LIGHT3 };
-    for (int i = 0; i < 4; i++) {
-        glLightfv(LIGHTS[i], GL_POSITION, LP[i][0], LP[i][1], LP[i][2], 0.0f);
-        glLightfv(LIGHTS[i], GL_DIFFUSE,  0.25f, 0.25f, 0.25f, 1.0f);
-        glLightfv(LIGHTS[i], GL_SPECULAR, 1.0f, 1.0f, 1.0f, 1.0f);
-    }
-    /* Local viewer: half-vector H = normalize(L + V) with V = vertex→eye (not a
-     * fixed (0,0,1)). Under the 25° camera tilt a distant viewer's H never
-     * aligns with visible-face normals (n·H ≈ 0.78 → pow(·,shininess) ≈ 0);
-     * the local viewer makes H track each vertex so highlights become visible. */
-    glLightModeli(GL_LIGHT_MODEL_LOCAL_VIEWER, 1);
+     * One light, positioned forward-and-slightly-up (0, 0.3, 1.0) →
+     * normalised ≈ (0, 0.29, 0.96): front faces brightest, top faces
+     * second, side/back faces dark — strong per-face contrast, which the
+     * 4-corner-light setup previously flattened out (every face lit from
+     * some direction → no contrast → no "face lighting up"). Diffuse at
+     * full 1.0 because there is only one light (no summation blowout).
+     * Specular is left OFF (glSetEnableSpecular not called) per "金属很少
+     * 有光斑"; a subtle specular layer can be added later as a texture. */
+    glLightfv(GL_LIGHT0, GL_POSITION, 0.0f, 0.3f, 1.0f, 0.0f);
+    glLightfv(GL_LIGHT0, GL_DIFFUSE,   1.0f, 1.0f, 1.0f, 1.0f);
+    glLightfv(GL_LIGHT0, GL_SPECULAR,  0.0f, 0.0f, 0.0f, 1.0f);
 
     /* Global ambient light model — the SAME for every material. This is the
      * uniform environment illumination all cubes (metal, brick, sand) share;
@@ -400,8 +375,8 @@ extern "C" void game_init(void)
     /* Default material (overwritten per-cube in draw_cube). */
     glMaterialfv(GL_FRONT_AND_BACK, GL_DIFFUSE,   0.3f, 0.3f, 0.3f, 1.0f);
     glMaterialfv(GL_FRONT_AND_BACK, GL_AMBIENT,   0.4f, 0.4f, 0.4f, 1.0f);
-    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR,  0.7f, 0.7f, 0.7f, 1.0f);
-    glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 20.0f);
+    glMaterialfv(GL_FRONT_AND_BACK, GL_SPECULAR,  0.0f, 0.0f, 0.0f, 1.0f);
+    glMaterialf (GL_FRONT_AND_BACK, GL_SHININESS, 0.0f);
 
     /* Enable per-vertex color tracking so cube() can tint faces */
     glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE);
@@ -409,11 +384,10 @@ extern "C" void game_init(void)
     /* Set default vertex color to white so material ambient/diffuse tracks it */
     glColor3f(1.0f, 1.0f, 1.0f);
 
-    /* Enable TinyGL's Blinn-Phong specular path (gated by zEnableSpecular,
-     * which is otherwise 0 and never set without this call). Normalise
-     * eye-space normals so lighting and sphere-map reflection are correct
-     * under non-uniform modelview scaling. */
-    glSetEnableSpecular(1);
+    /* Normalise eye-space normals so the sphere-map reflection coords
+     * (driven by the eye-space normal in vertex.c) are correct under
+     * non-uniform modelview scaling. (Specular path is off, so no local
+     * viewer needed.) */
     glEnable(GL_NORMALIZE);
 
     /* Dark gray clear color (dark sky look) */
