@@ -36,6 +36,14 @@ target_link_libraries(${COMPONENT_LIB} PRIVATE m)
 # WAMR game engine on core 0 (wasm game logic)
 target_compile_definitions(${COMPONENT_LIB} PRIVATE TGL_WASM_GAME=1)
 
+# Display framebuffer count. 3 buffers (render/post/DMA) consume 3×40KB = 120KB
+# of internal SRAM; with TinyGL's zbuf also forced internal (40KB) the 3rd buffer
+# tips internal SRAM over and ZB_open fails at boot (ZB_open → gl_malloc zbuf
+# returns NULL). 2 buffers (render/DMA) free 40KB so the zbuf fits. gl_post_process
+# is a no-op so the post buffer is unused anyway; DMA 5.5ms vs 33ms frame means the
+# 2-buffer wait_dma() almost never blocks. Override the #define in display_st7735.c.
+target_compile_definitions(${COMPONENT_LIB} PRIVATE DISPLAY_NUM_BUFFERS=2)
+
 # Conditionally compile sdl_demo.c when SDL demo is enabled
 if(CONFIG_XIAOMIAO_USE_SDL)
     target_sources(${COMPONENT_LIB} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/sdl_demo.c)
