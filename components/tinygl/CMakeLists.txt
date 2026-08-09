@@ -1,22 +1,25 @@
-# TinyGL — vendored fork of C-Chads/tinygl @ 36a7987
+# TinyGL — vendored from jserv/tinygl (TinyGL Evolved) @ c2e48591
 #
 # ESP-IDF component wrapping the software OpenGL rasterizer for the
 # Xiaomiao ST7735 (160x128, RGB565, MADCTL_RGB → big-endian on the wire).
 #
-# Local patches on top of upstream (see commit history):
+# Local patches on top of upstream (re-ported from the C-Chads fork, see
+# commit history):
 #   - 16-bit render path (TGL_FEATURE_16_BITS=1 / 32_BITS=0) → RGB565 PIXEL
 #   - TGL_OPTIMIZATION_HINT_BRANCH_COST=0 (texture-coord interp must not be
 #     branch-elided on the ESP32; upstream default 2 drops texcoords)
+#   - Multi-texture GL_ADD blend: glActiveTexture/glTexEnvi/glTexEnvfv/
+#     glTexOffset + GLTextureUnit[4] state (ztriangle.c TGL_MULTITEX_*)
+#   - zb_set_pbuf() for double-buffer swap (jserv lacks it)
 #   - TGL_PIXEL_BYTE_SWAP / TGL_TEXTURE_BYTE_SWAP macros: emit big-endian
 #     RGB565 words so a little-endian CPU lays them out big-endian in the
 #     framebuffer that esp_lcd_panel_io_tx_color ships as-is (no swap flag).
 #
-# Upstream: https://github.com/C-Chads/tinygl  (this is a maintained local copy;
+# Upstream: https://github.com/jserv/tinygl  (this is a maintained local copy;
 # pulling upstream changes is a manual merge, not a submodule update).
 
 idf_component_register(
     SRCS
-        src/accum.c
         src/api.c
         src/arrays.c
         src/clear.c
