@@ -8,9 +8,6 @@
  *   - Gravity + ground/wall collision physics
  *   - 6-face skybox (rotation-only, depth-write off)
  *   - Backface culling + depth test
- *
- * The debug console (components/debug_console) exposes live REPL commands
- * to probe framebuffer/texture pixels, pause/resume, set cube count, etc.
  */
 
 #include "GL/gl.h"

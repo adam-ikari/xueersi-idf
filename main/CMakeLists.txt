@@ -27,7 +27,6 @@ idf_component_register(SRCS "main.c"
                                      georgik__sdl_bsp
                                      wasm-micro-runtime
                                      tinygl
-                                     debug_console
                        INCLUDE_DIRS ""
                        PRIV_INCLUDE_DIRS ${CMAKE_CURRENT_BINARY_DIR})
 
