@@ -105,16 +105,19 @@ typedef GLushort PIXEL;
 #error "wrong TGL_FEATURE_RENDER_BITS"
 #endif
 
-#if TGL_HAS(LIT_TEXTURES)
-/* Un-swap tpix before extracting channels (GET_RED etc assume logical 565
- * layout, but the stored value is byte-swapped when TGL_PIXEL_BYTE_SWAP=1).
- * Without un-swap, the R/G/B masks hit the wrong bit fields, producing
- * incorrect colors (e.g., green tint on ceramic beige). */
+/* Byte-swapped framebuffer/texture pixels (on-wire big-endian RGB565) are
+ * unswapped back to logical 565 layout before any channel extraction.
+ * GET_RED/GET_GREEN/GET_BLUE/GET_REDDER/GET_GREENER/GET_BLUEER all assume
+ * logical 565 layout, so every pixel operand routed through them must pass
+ * _TGL_UNSWAP16 first (RGB_MIX_FUNC, TGL_BLEND_FUNC). Host builds with
+ * TGL_PIXEL_BYTE_SWAP=0 are a no-op. */
 #if TGL_PIXEL_BYTE_SWAP
 #define _TGL_UNSWAP16(p) ((PIXEL)(((p) << 8) | ((p) >> 8)))
 #else
 #define _TGL_UNSWAP16(p) (p)
 #endif
+
+#if TGL_HAS(LIT_TEXTURES)
 #define RGB_MIX_FUNC(rr, gg, bb, tpix) \
     ({ \
         PIXEL _u = _TGL_UNSWAP16(tpix); \
@@ -180,11 +183,13 @@ typedef GLushort PIXEL;
 #define TGL_BLEND_FUNC(source, dest)                    \
     {{GLuint sr, sg, sb, dr, dg, db;                    \
     {                                                   \
-        GLuint temp = source;                           \
+        /* both operands are byte-swapped framebuffer  \
+         * pixels -> unswap to logical 565 first */     \
+        GLuint temp = _TGL_UNSWAP16(source);            \
         sr = GET_REDDER(temp);                          \
         sg = GET_GREENER(temp);                         \
         sb = GET_BLUEER(temp);                          \
-        temp = dest;                                    \
+        temp = _TGL_UNSWAP16(dest);                     \
         dr = GET_REDDER(temp);                          \
         dg = GET_GREENER(temp);                         \
         db = GET_BLUEER(temp);                          \
