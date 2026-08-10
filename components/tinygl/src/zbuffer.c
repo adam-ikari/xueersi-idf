@@ -42,7 +42,7 @@ ZBuffer *ZB_open(GLint xsize,
 
     size = zb->xsize * zb->ysize * sizeof(GLushort);
 
-    zb->zbuf = gl_malloc(size);
+    zb->zbuf = gl_malloc_internal(size);   /* 内部 SRAM:zbuf 逐像素热路径 */
     if (zb->zbuf == NULL)
         goto error;
 
@@ -102,7 +102,7 @@ GLint ZB_resize(ZBuffer *zb, void *frame_buffer, GLint xsize, GLint ysize)
 
     size = xsize * ysize * sizeof(GLushort);
 
-    new_zbuf = gl_malloc(size);
+    new_zbuf = gl_malloc_internal(size);   /* 内部 SRAM:zbuf 逐像素热路径 */
     if (new_zbuf == NULL)
         return -1;
 

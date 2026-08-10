@@ -423,5 +423,7 @@ typedef void (*ZB_fillTriangleFunc)(ZBuffer *,
 extern void gl_free(void *p);
 extern void *gl_malloc(GLint size);
 extern void *gl_zalloc(GLint size);
+/* Force a block into internal SRAM (zbuf per-pixel hot path). */
+extern void *gl_malloc_internal(GLint size);
 
 #endif /* TGL_ZBUFFER_H */

@@ -7,6 +7,7 @@ idf_component_register(SRCS "main.c"
                                      "render_queue.c"
                                      "glcmd_stream.c"
                                      "wasm_game.c"
+                                     "res_manager.c"
                                      "display_st7735.c"
                        PRIV_REQUIRES esp_lcd
                                      esp_timer
@@ -101,7 +102,7 @@ endif()
 set(GEN_TEX ${CMAKE_CURRENT_SOURCE_DIR}/../tools/gen_texture.py)
 set(TEX_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
-set(TEXTURES ceramic checker brick grid sky sand horizon metal specular reflect)
+set(TEXTURES sky horizon sand metal reflect brick)
 set(TEX_HEADERS "")
 foreach(kind ${TEXTURES})
     set(hdr ${TEX_DIR}/texture_${kind}.h)

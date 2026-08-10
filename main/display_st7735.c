@@ -40,7 +40,7 @@ static void hw_display_set_flush_ready_cb(void *cb, void *ctx) { (void)cb; (void
 static const char *TAG = "st7735_be";
 
 #ifndef DISPLAY_NUM_BUFFERS
-#define DISPLAY_NUM_BUFFERS 3   /* render / post / DMA pipeline */
+#define DISPLAY_NUM_BUFFERS 2   /* render / DMA pipeline (2-fb paced) */
 #endif
 
 static uint16_t *s_fb[DISPLAY_NUM_BUFFERS] = { 0 };

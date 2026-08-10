@@ -12,16 +12,31 @@
 #include "zgl.h"
 #include <string.h>
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+
+static const char *TAG = "glcmd";
 
 /* ── Encoder (core 0) ───────────────────────────────────── */
 
 /* N buffers; producer (core 0) and consumer (core 1) each own their own
- * index, so no lock is needed. s_len[i]==0 → buffer free for the producer. */
-static uint8_t s_buf[GLCMD_NUM_BUFFERS][GLCMD_BUFFER_SIZE];
+ * index, so no lock is needed. s_len[i]==0 → buffer free for the producer.
+ * Buffers live in PSRAM (16 KB total) — allocated by glcmd_init(), which the
+ * wasm game task calls before WAMR starts. Sequential write/read + shared
+ * cache keep the PSRAM round-trip cheap; still zero-copy. */
+static uint8_t (*s_buf)[GLCMD_BUFFER_SIZE] = NULL;
 static volatile uint32_t s_len[GLCMD_NUM_BUFFERS];
 static uint32_t s_pos = 0;
 static uint32_t s_enc_idx = 0;   /* written only by core 0 */
 static uint32_t s_dec_idx = 0;   /* written only by core 1 */
+
+void glcmd_init(void)
+{
+    if (s_buf) return;
+    s_buf = (uint8_t (*)[GLCMD_BUFFER_SIZE])heap_caps_malloc(
+                GLCMD_NUM_BUFFERS * GLCMD_BUFFER_SIZE, MALLOC_CAP_SPIRAM);
+    if (!s_buf) ESP_LOGE(TAG, "glcmd SPIRAM alloc failed (%d B)",
+                         GLCMD_NUM_BUFFERS * GLCMD_BUFFER_SIZE);
+}
 
 void glcmd_begin_frame(void)
 {
@@ -57,6 +72,7 @@ bool glcmd_f32(float v) {
 
 const uint8_t *glcmd_frame_poll(uint32_t *out_len)
 {
+    if (!s_buf) return NULL;               /* not initialised yet (core 1) */
     uint32_t len = s_len[s_dec_idx];
     if (!len) return NULL;
     *out_len = len;
@@ -279,6 +295,29 @@ uint32_t glcmd_replay(const uint8_t *buf, uint32_t len)
             (void)read_u32(&p);
             (void)read_u32(&p);
             (void)read_u32(&p);
+            break;
+        }
+
+        /* ── Texture object lifecycle (core 0 resolved, core 1 blind) ── */
+        case GLCMD_TEX_IMAGE2D_RES: {
+            /* 128x128 == TGL_FEATURE_TEXTURE_DIM → zero-copy upload: the
+             * read-only DROM source pointer is consumed and converted into the
+             * GLTexture's owned inline pixmap (no resize copy). core 1 has no
+             * resource concept — it just receives the resolved data pointer. */
+            const uint8_t *data = (const uint8_t *)(uintptr_t)read_u32(&p);
+            GLsizei w = (GLsizei)read_u32(&p);
+            GLsizei h = (GLsizei)read_u32(&p);
+            if (data)
+                glTexImage2D(GL_TEXTURE_2D, 0, 3, w, h, 0,
+                             GL_RGB, GL_UNSIGNED_BYTE, data);
+            break;
+        }
+        case GLCMD_DELETE_TEXTURES: {
+            uint32_t n = read_u32(&p);
+            GLuint ids[16];
+            if (n > 16) n = 16;               /* defensive clamp */
+            for (uint32_t i = 0; i < n; i++) ids[i] = read_u32(&p);
+            glDeleteTextures((GLsizei)n, ids);
             break;
         }
 

@@ -57,6 +57,11 @@ IMPORT(void, glBlendFunc, int sfactor, int dfactor);
 /* ── New: Clear ── */
 IMPORT(void, glClearColor, float r, float g, float b, float a);
 
+/* ── Texture object lifecycle (wasm owns create/bind/delete) ── */
+IMPORT(void, glGenTextures, int n, int *textures);
+IMPORT(void, glDeleteTextures, int n, const int *textures);
+IMPORT(void, glTexImageResource, const char *name);
+
 // ── GL constants ────────────────────────────────────────
 enum {
     GL_QUADS             = 0x0007,
@@ -116,20 +121,11 @@ enum {
     BTN_B         = 5,
 };
 
-// Texture names (firmware-integrated; integer names, no data in the API)
-// IDs 1-10 are uploaded in tinygl_test.c at boot.
-enum {
-    TEX_CERAMIC  = 1,
-    TEX_CHECKER  = 2,
-    TEX_BRICK    = 3,
-    TEX_GRID     = 4,
-    TEX_SKY      = 5,
-    TEX_SAND     = 6,
-    TEX_HORIZON  = 7,
-    TEX_METAL    = 8,
-    TEX_SPECULAR = 9,
-    TEX_REFLECT  = 10,
-};
+// Texture object ids are now owned entirely by wasm: created via
+// glGenTextures (a sync core-0 native that returns fresh ids, never reused),
+// loaded by name via glTexImageResource("metal"), and deleted via
+// glDeleteTextures. Pixel data lives host-side in res_manager — names are
+// the only contract crossing the API; no texture ids are baked in here.
 
 // ── Material presets ────────────────────────────────────
 // Each material pairs a base texture with an optional reflection overlay
@@ -141,21 +137,38 @@ enum {
 // glMaterialf(GL_SHININESS) through TinyGL's Blinn-Phong path (light.c),
 // NOT by a TEX_SPECULAR overlay texture.
 struct material_t {
-    int base;           /* unit0 base texture (fixed UV) */
-    int reflect;        /* unit1 reflection overlay (ADD + glTexOffset scroll), 0=off */
+    const char *name;   /* res_manager 名称 —— 稳定契约 */
+    int base;           /* 运行时 id,0=尚未加载(懒) */
+    int reflect;        /* 运行时 id,0=关闭 */
     float refl_w;       /* unit1 ADD weight */
     float spec[4];      /* GL_SPECULAR rgba */
     float shininess;    /* GL_SHININESS */
     bool metal;         /* enable reflection scroll */
 };
-static const material_t s_materials[] = {
-    // base        reflect      refl_w  spec                    shin   metal?
-    { TEX_METAL,   TEX_REFLECT, 0.5f,   {0.85f,0.85f,0.85f,1.0f}, 90.0f, true  },  // 金属
-    { TEX_BRICK,   0,           0.0f,   {0.10f,0.10f,0.10f,1.0f},  8.0f, false },  // 砖块
-    { TEX_SAND,    0,           0.0f,   {0.15f,0.15f,0.15f,1.0f}, 12.0f, false },  // 沙石
+static material_t s_materials[] = {
+    // name       base reflect  refl_w  spec                    shin   metal?
+    { "metal",    0,   0,       0.5f,   {0.85f,0.85f,0.85f,1.0f}, 90.0f, true  },  // 金属
+    { "brick",    0,   0,       0.0f,   {0.10f,0.10f,0.10f,1.0f},  8.0f, false },  // 砖块
+    { "sand",     0,   0,       0.0f,   {0.15f,0.15f,0.15f,1.0f}, 12.0f, false },  // 沙石
 };
 static const int MATERIAL_COUNT = sizeof(s_materials) / sizeof(s_materials[0]);
 static int s_material_idx = 0;  /* current material index */
+
+/* Texture object ids (never reused; host glGenTextures hands them out from a
+ * monotonic counter). Skybox objects live for the whole session; material
+ * base/reflect are created lazily on first selection and deleted on switch. */
+static int s_sky_id = 0, s_horizon_id = 0, s_skybox_sand_id = 0;
+static int s_tex_gen_id = 0;
+
+static int load_texture(const char *name)
+{
+    glActiveTexture(GL_TEXTURE0);   /* 防御:恒在 unit0 加载 */
+    glGenTextures(1, &s_tex_gen_id);
+    int id = s_tex_gen_id;
+    glBindTexture(GL_TEXTURE_2D, id);
+    glTexImageResource(name);
+    return id;
+}
 
 // ── Global state ────────────────────────────────────────
 static float s_angle = 0.0f;       /* cube rotation (fast) */
@@ -224,12 +237,12 @@ static void draw_skybox(void)
     glDisable(GL_LIGHTING);
     glDisable(GL_CULL_FACE);
 
-    /* +X */ skybox_face( s,-s,-s,  0, 0, 2*s,  0, 2*s, 0, TEX_HORIZON);
-    /* -X */ skybox_face(-s,-s, s,  0, 0,-2*s,  0, 2*s, 0, TEX_HORIZON);
-    /* +Y */ skybox_face(-s, s, s,  2*s, 0, 0,  0, 0,-2*s, TEX_SKY);
-    /* -Y */ skybox_face(-s,-s,-s,  2*s, 0, 0,  0, 0, 2*s, TEX_SAND);
-    /* +Z */ skybox_face(-s,-s, s,  2*s, 0, 0,  0, 2*s, 0,  TEX_HORIZON);
-    /* -Z */ skybox_face( s,-s,-s, -2*s, 0, 0,  0, 2*s, 0,  TEX_HORIZON);
+    /* +X */ skybox_face( s,-s,-s,  0, 0, 2*s,  0, 2*s, 0, s_horizon_id);
+    /* -X */ skybox_face(-s,-s, s,  0, 0,-2*s,  0, 2*s, 0, s_horizon_id);
+    /* +Y */ skybox_face(-s, s, s,  2*s, 0, 0,  0, 0,-2*s, s_sky_id);
+    /* -Y */ skybox_face(-s,-s,-s,  2*s, 0, 0,  0, 0, 2*s, s_skybox_sand_id);
+    /* +Z */ skybox_face(-s,-s, s,  2*s, 0, 0,  0, 2*s, 0,  s_horizon_id);
+    /* -Z */ skybox_face( s,-s,-s, -2*s, 0, 0,  0, 2*s, 0,  s_horizon_id);
 
     glEnable(GL_CULL_FACE);
     glEnable(GL_LIGHTING);
@@ -319,7 +332,20 @@ extern "C" void game_init(void)
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
-    glFlush();
+
+    /* Texture upload must be driven from wasm: the rasterizer is gated on
+     * glEnable(GL_TEXTURE_2D) (clip.c:455) and every draw binds a texture. */
+    glEnable(GL_TEXTURE_2D);
+
+    /* 懒加载:skybox + 当前材质(metal,index 0);其余材质首次 BTN_A 选中才加载。
+     * 每个对象独立(天空盒 sand 与材质 sand 同名数据、两个对象,正确 GL)。 */
+    s_sky_id         = load_texture("sky");
+    s_horizon_id     = load_texture("horizon");
+    s_skybox_sand_id = load_texture("sand");
+    s_materials[0].base    = load_texture("metal");
+    s_materials[0].reflect = load_texture("reflect");
+
+    glFlush();   /* setup(含全部纹理创建)作为第 0 帧发布 */
 }
 
 // ── Consume key events ──────────────────────────────────
@@ -335,7 +361,17 @@ static void handle_keys(void)
         if (edge != KEY_EDGE_DOWN) continue;  /* only act on press */
 
         if (btn == BTN_A) {
-            s_material_idx = (s_material_idx + 1) % MATERIAL_COUNT;
+            int next = (s_material_idx + 1) % MATERIAL_COUNT;
+            material_t *out = &s_materials[s_material_idx];
+            material_t *in  = &s_materials[next];
+            /* 安全前提:上次 draw_cube 末尾已把 unit1/2 复位 GL_REPLACE,
+             * multitex 不解引用非 ADD 单元 —— 此处 delete 无悬挂引用。 */
+            if (out->base)    glDeleteTextures(1, &out->base);
+            if (out->reflect) glDeleteTextures(1, &out->reflect);
+            out->base = out->reflect = 0;
+            if (!in->base)         in->base    = load_texture(in->name);
+            if (in->metal && !in->reflect) in->reflect = load_texture("reflect");
+            s_material_idx = next;
             s_label_show = 45;
         }
     }

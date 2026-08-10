@@ -76,6 +76,10 @@ enum {
     GLCMD_SET_ENABLE_SPECULAR, // u32 flag  — enable TinyGL Blinn-Phong path
     GLCMD_TEX_GENI,           // u32 coord, u32 pname, u32 param (sphere-map)
 
+    /* ─ Texture object lifecycle (resolved by core 0, replayed by core 1) ─ */
+    GLCMD_TEX_IMAGE2D_RES,  /* u32 data_ptr (DROM 只读指针), u32 w, u32 h */
+    GLCMD_DELETE_TEXTURES,  /* u32 n, n × u32 texture ids */
+
     GLCMD_COUNT
 };
 
@@ -87,6 +91,9 @@ enum {
 
 /* ── Encoder (wasm host side, core 0) ──────────────────── */
 
+/** Allocate the PSRAM command buffers. Call once before any encoder use
+ *  (wasm_game_task does this before WAMR init). */
+void glcmd_init(void);
 void glcmd_begin_frame(void);          /* wait for a free buffer, reset pos */
 void glcmd_publish(void);              /* publish current buffer, advance */
 bool glcmd_u8(uint8_t v);

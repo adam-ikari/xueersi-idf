@@ -23,6 +23,7 @@
 #include <string.h>
 #include "freertos/task.h"
 #include "glcmd_stream.h"
+#include "res_manager.h"
 #include "wasm_game.wasm.h"
 
 static const char *TAG = "wasm_game";
@@ -125,6 +126,59 @@ static void host_glBlendFunc(wasm_exec_env_t env, int32_t sfactor, int32_t dfact
 static void host_glClearColor(wasm_exec_env_t env, float r, float g, float b, float a)
 { GLW_EMPTY(env); glcmd_u8(GLCMD_CLEAR_COLOR); glcmd_f32(r); glcmd_f32(g); glcmd_f32(b); glcmd_f32(a); }
 
+/* ── Texture object lifecycle ──────────────────────────────────────────────
+ * glGenTextures is the ONE sync native in this stream (the command channel is
+ * strictly one-way, no return path): it hands out a monotonic ID and writes it
+ * back into wasm memory directly. glTexImageResource / glDeleteTextures go
+ * down the normal command stream. */
+
+static uint32_t s_next_tex_id = 1;   /* 唯一纹理 ID 来源,不复用 */
+
+static void host_glGenTextures(wasm_exec_env_t env, int32_t n, int32_t textures_ptr)
+{
+    GLW_EMPTY(env);
+    if (n <= 0 || !textures_ptr) return;
+    if (n > 16) n = 16;
+    wasm_module_inst_t inst = get_module_inst(env);
+    if (!wasm_runtime_validate_app_addr(inst, (uint32_t)textures_ptr,
+                                        (uint32_t)n * 4)) return;
+    uint32_t *ids = (uint32_t *)wasm_runtime_addr_app_to_native(inst,
+                                            (uint32_t)textures_ptr);
+    for (int i = 0; i < n; i++) ids[i] = s_next_tex_id++;
+}
+
+static void host_glTexImageResource(wasm_exec_env_t env, int32_t name_ptr)
+{
+    GLW_EMPTY(env);
+    wasm_module_inst_t inst = get_module_inst(env);
+    if (!name_ptr || !wasm_runtime_validate_app_str_addr(inst, (uint32_t)name_ptr)) {
+        glcmd_u8(GLCMD_NOP); return;         /* 未知/bad → 不上传 */
+    }
+    const char *name = (const char *)wasm_runtime_addr_app_to_native(inst,
+                                            (uint32_t)name_ptr);
+    const tex_res_t *r = res_lookup(name);
+    if (!r || !r->data) { glcmd_u8(GLCMD_NOP); return; }
+    glcmd_u8(GLCMD_TEX_IMAGE2D_RES);
+    glcmd_u32((uint32_t)(uintptr_t)r->data); /* 已解析 DROM 指针,跨流安全 */
+    glcmd_u32(r->w);
+    glcmd_u32(r->h);
+}
+
+static void host_glDeleteTextures(wasm_exec_env_t env, int32_t n, int32_t textures_ptr)
+{
+    GLW_EMPTY(env);
+    if (n <= 0 || !textures_ptr) { glcmd_u8(GLCMD_NOP); return; }
+    if (n > 16) n = 16;
+    wasm_module_inst_t inst = get_module_inst(env);
+    if (!wasm_runtime_validate_app_addr(inst, (uint32_t)textures_ptr,
+                                        (uint32_t)n * 4)) { glcmd_u8(GLCMD_NOP); return; }
+    const uint32_t *ids = (const uint32_t *)wasm_runtime_addr_app_to_native(inst,
+                                            (uint32_t)textures_ptr);
+    glcmd_u8(GLCMD_DELETE_TEXTURES);
+    glcmd_u32((uint32_t)n);
+    for (int i = 0; i < n; i++) glcmd_u32(ids[i]);
+}
+
 static void host_glFlush(wasm_exec_env_t env)
 { GLW_EMPTY(env); glcmd_publish(); glcmd_begin_frame(); }
 
@@ -184,6 +238,9 @@ static NativeSymbol gl_natives[] = {
     { "glTexEnvfv",      (void *)host_glTexEnvfv,      "(iiffff)", NULL },
     { "glTexOffset",     (void *)host_glTexOffset,     "(iff)",    NULL },
     { "glTexGeni",       (void *)host_glTexGeni,       "(iii)",    NULL },
+    { "glGenTextures",      (void *)host_glGenTextures,      "(ii)", NULL },
+    { "glTexImageResource", (void *)host_glTexImageResource, "(i)",  NULL },
+    { "glDeleteTextures",   (void *)host_glDeleteTextures,   "(ii)", NULL },
     { "glSetEnableSpecular", (void *)host_glSetEnableSpecular, "(i)", NULL },
     { "glEnable",        (void *)host_glEnable,        "(i)",      NULL },
     { "glDisable",       (void *)host_glDisable,       "(i)",      NULL },
@@ -256,6 +313,8 @@ void wasm_game_task(void *arg)
 {
     (void)arg;
     ESP_LOGI(TAG, "wasm_game task starting on core %d", xPortGetCoreID());
+
+    glcmd_init();   /* command buffers in PSRAM before any encoder use */
 
     RuntimeInitArgs init_args = { 0 };
     init_args.mem_alloc_type = Alloc_With_Allocator;

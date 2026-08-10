@@ -20,16 +20,9 @@
 #include "hw_board.h"
 #endif
 
-#include "texture_ceramic.h"   /* compile-time generated, in build dir */
-#include "texture_checker.h"
-#include "texture_brick.h"
-#include "texture_grid.h"
-#include "texture_sky.h"
-#include "texture_sand.h"
-#include "texture_horizon.h"
-#include "texture_metal.h"
-#include "texture_specular.h"
-#include "texture_reflect.h"
+/* NOTE: texture data headers are NOT included here — they are the sole
+ * property of res_manager.c (single-TU include; wasm owns GL texture object
+ * lifecycle and requests data by name through glTexImageResource). */
 #include <pthread.h>
 #include "esp_pthread.h"
 #include "tinygl_physics.h"
@@ -84,17 +77,8 @@ ZBuffer *s_zb  = NULL;
 static int s_width  = 160;
 static int s_height = 128;
 
-/* Texture name → texture IDs (must match glBindTexture calls in draw_*). */
-#define TEX_CERAMIC  1
-#define TEX_CHECKER  2
-#define TEX_BRICK    3
-#define TEX_GRID     4
-#define TEX_SKY      5
-#define TEX_SAND     6
-#define TEX_HORIZON  7
-#define TEX_METAL    8
-#define TEX_SPECULAR 9
-#define TEX_REFLECT  10
+/* Texture IDs no longer exist here — texture object lifecycle is owned by the
+ * wasm game (glGenTextures / glTexImageResource / glDeleteTextures). */
 
 /* ── Spawn a falling cube into the physics engine (called by debug console). */
 int tinygl_spawn_cube(void)
@@ -120,6 +104,7 @@ static void diag_fb(const char *label)
              c->zb->zbuf[0]);
 }
 
+#ifndef TGL_WASM_GAME
 /* ── Render a reflective cube (environment map reflection) ──
  * For each vertex, compute reflection vector R = I - 2*(N·I)*N
  * where I = eye-to-vertex direction, N = vertex normal.
@@ -209,6 +194,7 @@ static void draw_reflective_cube(float cx, float cy, float cz, float size,
     glPopMatrix();
     glEnable(GL_LIGHTING);
 }
+#endif /* !TGL_WASM_GAME */
 
 
 /* ── Render a single textured cube ────────────────────── */
@@ -252,6 +238,7 @@ static void draw_textured_cube(float x, float y, float z, float size,
     glPopMatrix();
 }
 
+#ifndef TGL_WASM_GAME
 /* ── Metal cube: 3-layer additive multi-texture blend ──
  *   unit 0: metal base (GL_REPLACE)
  *   unit 1: desert reflection map (GL_ADD, weight 0.5)
@@ -322,6 +309,7 @@ static void draw_metal_cube(float x, float y, float z, float size,
     glEnd();
     glPopMatrix();
 }
+#endif /* !TGL_WASM_GAME */
 
 /* ── Ordered dithering (Bayer 4×4) for 16-bit color ────
  * Simulates higher color depth by spreading quantization error across
@@ -422,29 +410,10 @@ int gl_init(int w, int h)
     glMaterialfv(GL_FRONT, GL_DIFFUSE, mat_dif);
     ESP_LOGI(TAG, "Lighting enabled (LIGHT0 directional + ambient)");
 
-    /* ── Textures ── 10 compile-time textures uploaded to flash-backed IDs. */
-    {
-        struct { GLuint id; const GLvoid *data; const char *name; } texs[] = {
-            { TEX_CERAMIC,  texture_ceramic_data,  "ceramic"  },
-            { TEX_CHECKER,  texture_checker_data,  "checker"  },
-            { TEX_BRICK,    texture_brick_data,    "brick"    },
-            { TEX_GRID,     texture_grid_data,     "grid"     },
-            { TEX_SKY,      texture_sky_data,      "sky"      },
-            { TEX_SAND,     texture_sand_data,     "sand"     },
-            { TEX_HORIZON,  texture_horizon_data,  "horizon"  },
-            { TEX_METAL,    texture_metal_data,    "metal"    },
-            { TEX_SPECULAR, texture_specular_data, "specular" },
-            { TEX_REFLECT,  texture_reflect_data,  "reflect"  },
-        };
-        for (int i = 0; i < 10; i++) {
-            glBindTexture(GL_TEXTURE_2D, texs[i].id);
-            glTexImage2D(GL_TEXTURE_2D, 0, 3, 128, 128, 0,
-                         GL_RGB, GL_UNSIGNED_BYTE, texs[i].data);
-            ESP_LOGI(TAG, "Texture %d uploaded: %s", texs[i].id, texs[i].name);
-        }
-        glEnable(GL_TEXTURE_2D);
-        ESP_LOGI(TAG, "GL_TEXTURE_2D enabled (10 textures bound)");
-    }
+    /* Texture preload REMOVED — texture object lifecycle is owned entirely by
+     * the wasm game (glGenTextures / glTexImageResource / glDeleteTextures in
+     * wasm_game.c, data via res_manager). Nothing is bound here; gl_init is
+     * resource-agnostic. */
 
     diag_fb("after_init");
     ESP_LOGI(TAG, "TinyGL initialized: %dx%d", w, h);
@@ -501,6 +470,7 @@ void render_frame(float angle_y)
      * (inside `if (buf)` above), so the rotating backend is never double-DMA'd. */
 }
 
+#ifndef TGL_WASM_GAME
 /* ── Physics + scene update task (core 0) ───────────────
  * Runs physics simulation AND generates render commands for
  * core 1 to consume. This is where all model-world-coordinate
@@ -566,6 +536,7 @@ static void tinygl_scene_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(33));
     }
 }
+#endif /* !TGL_WASM_GAME */
 
 /* ── Render task (core 1) ──────────────────────────────── */
 void tinygl_render_task(void *arg)
